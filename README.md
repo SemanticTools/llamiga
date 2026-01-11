@@ -34,25 +34,28 @@ npm install @semantictools/llamiga
 ## Usage
 
 ```javascript
-import { getPlugin } from '@semantictools/llamiga';
+import * as llAmiga  from '../src/index.mjs';
 
-const claude = getPlugin("claude");
-const result = await claude.ask("What is the meaning of life?");
+let geminiPG = llAmiga.getPlugin('gemini');
+console.log("Plugin default model: " , geminiPG.getModel());
 
-console.log(result);
+let response = await geminiPG.ask("Hello, how are you?");
+if( response.success ) {
+    console.log("Gemini response: ", response.text );
+}
 ```
 
 Switch providers instantly:
 
 ```javascript
-const gemini = getPlugin("gemini");
-const gpt = getPlugin("openai");
-const local = getPlugin("ollama");
+const gemini = llAmiga.getPlugin("gemini");
+const gpt = llAmiga.getPlugin("openai");
+const local = llAmiga.getPlugin("ollama");
 
 // Same interface, different minds
-await gemini.ask("Explain quantum computing");
-await gpt.ask("Explain quantum computing");
-await local.ask("Explain quantum computing");
+let result1 = await gemini.ask("Explain quantum computing");
+let result1 = await gpt.ask("Explain quantum computing");
+let result1 = await local.ask("Explain quantum computing");
 ```
 
 ## Configuration
