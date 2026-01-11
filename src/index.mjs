@@ -27,6 +27,7 @@ const LASTRESPONSE = "<lastresponse>";
 
 
 function _getPlugin( id0 ) {
+
   const id = id0.toLowerCase();
   const plugin = plugins[id];
   
@@ -38,8 +39,7 @@ function _getPlugin( id0 ) {
   return { ...plugin, _: { id, type: "LLaMiga-API-Plugin" } };
 }
 
-function createObject( pluginSpecs ) {
-    // if pluginName is an array, make an array called plugins
+function createObject( pluginSpecs, options = {}) {
 
     let plugins = [];
     let pluginIndex = {};
@@ -47,6 +47,10 @@ function createObject( pluginSpecs ) {
     let plugin = null;
     let pluginName = "empty";
     let model = null;
+    let macros = false;
+
+    if( options && options.macros ) macros = true;
+
     if( Array.isArray( pluginSpecs )) {
         if( pluginSpecs.length === 0 ) {
             throw new Error( 'Plugin array is empty' );
@@ -79,22 +83,27 @@ function createObject( pluginSpecs ) {
         model: plugin.getDefaultModel(),
         discussion: [],
         lastResponse: "sorry, there is no response yet",
+        macros: macros,
+
         getLastDetailedResponse: function() {
             return this.rawResponse;
         },
         setModel: function( model ) {
+
             this.model = model;
             this.pluginModels[ this.plugin._.id ] = model;
             return this;
         },
         getModel() {
+
             return this.model;
         },
         getProviderName() {
+
             return this.pluginName;
         },        
         setProvider: function( pluginName, overrideModel ) {
-            //check if pluginName is in pluginIndex
+
             const id = pluginName.toLowerCase();
             const plugin = this.pluginIndex[ id ];
             if( !plugin ) {
@@ -108,6 +117,7 @@ function createObject( pluginSpecs ) {
             this.setModel( model );
         },
         addMessage: function( role, content ) {
+
             if( role !== 'system' && role !== 'user' && role !== 'assistant' ) {
                 throw new Error( 'Invalid role: ' + role + '. Must be one of system, user, assistant.' );
             }
@@ -131,12 +141,15 @@ function createObject( pluginSpecs ) {
             }            
         },        
         ask: async function( prompt, overrideModel ) {
+
             return await this._rawChat( prompt, null, overrideModel );
         },
         rawAsk: async function( prompt, discussion, overrideModel ) {
+
             return await this._rawChat( prompt, discussion, overrideModel );
         },         
         mixChat: async function( prompt, discussion, overrideModel ) {
+
             let result = await this._rawChat( prompt, this.discussion, overrideModel );
             if( result ) {
                this.addMessage( 'user', prompt );
@@ -146,7 +159,6 @@ function createObject( pluginSpecs ) {
         },
         chat: async function( prompt, overrideModel ) {
 
-
             let result = await this._rawChat( prompt, this.discussion, overrideModel );
             if( result ) {
                this.addMessage( 'user', prompt );
@@ -155,6 +167,7 @@ function createObject( pluginSpecs ) {
             return result;
         },
         _rawChat: async function( prompt0, discussion, overrideModel ) {
+
             let timing = common.getTiming();
             let startDate = new Date().toISOString();
             let model = this.model;
@@ -163,7 +176,7 @@ function createObject( pluginSpecs ) {
             }
 
             let prompt = prompt0;
-            if( prompt === LASTRESPONSE) prompt = this.lastResponse;
+            if( prompt === LASTRESPONSE && this.macros ) prompt = this.lastResponse;
 
             let result = 
                 await this.plugin.complete( 
@@ -187,6 +200,7 @@ function createObject( pluginSpecs ) {
             return result;
         },
         getDiscussion: function() {
+
             return this.discussion;
         }   
 
@@ -195,8 +209,9 @@ function createObject( pluginSpecs ) {
     return session;
 }
 
-function createSession( pluginSpecs ) {
-    let object = createObject( pluginSpecs );
+function createSession( pluginSpecs, options = {} ) {
+    
+    let object = createObject( pluginSpecs, options );
 
     delete object.ask;
     delete object.rawAsk;  

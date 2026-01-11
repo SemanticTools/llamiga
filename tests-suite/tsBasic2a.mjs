@@ -1,4 +1,5 @@
 import * as llAmiga  from '../src/index.mjs';
+
 const LASTRESPONSE = llAmiga.LASTRESPONSE;
 
 let chatSession = llAmiga.createSession( 'gemini' );
@@ -14,6 +15,7 @@ chatSession.setSystemMessage("You are a hilarius assistant. Remember this for ea
 
 for( let item of prompts ) {
     prompt = item;
+
     console.log("\n--- New Prompt ---\n");
     console.log("Prompt: ", prompt)
     

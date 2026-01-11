@@ -1,21 +1,21 @@
 {
-  "name": "@semantictools/mnt-matcher",
+  "name": "@semantictools/llamiga",
   "version": "0.8.1",
-  "description": "MNT-Matcher - NLP matching and searching library for JavaScript/Node.js",
+  "description": "LLaMiga is a lightweight framework to connect to and interact with LLMs (Large Language Models) such as OpenAI's GPT series, Anthropic's Claude, and others. It provides a simple and flexible interface for making API calls, handling responses, and managing conversations with these models.",
   "type": "module",
-  "main": "src/mntMatch.mjs",
+  "main": "src/index.mjs",
   "exports": {
-    ".": "./src/mntMatch.mjs"
+    ".": "./src/index.mjs"
   },
   "files": [
     "src"
   ],
   "keywords": [
-    "mnt-matcher",
-    "indexing",
-    "search",
-    "text-search",
-    "fuzzy-search"
+    "llm",
+    "ai",
+    "chat",
+    "complete",
+    "large language model"
   ],
   "author": "Dusty Wilhelm Murray / Semantic Tools",
   "license": "MIT"

@@ -1,11 +1,14 @@
 import * as llAmiga  from '../src/index.mjs';
+
 const LASTRESPONSE = llAmiga.LASTRESPONSE;
 
 let chatSession = llAmiga.createSession( 
     [ 
         'gemini', 'anthropic', 'grok', 'mistral', 'openai',
         'toolbert'
-    ] );
+    ], 
+    { macros: true } //allows the use of LASTRESPONSE in prompts
+ );
 let response, prompt;
 
 
@@ -32,15 +35,20 @@ let prompts = [
     }
 ];
 
-chatSession.setSystemMessage("You are a hilarius assistant. You resist being unfunny, so much so,  a black hole might appear, and it would be laughing so laudly that even humor cannot escape it. Remember this for each reply.");
+chatSession.setSystemMessage(
+    "You are a hilarius assistant. You resist being unfunny, so much so,  a black hole might appear, and it would be laughing so laudly that even humor cannot escape it. Remember this for each reply."
+);
+
 
 for( let item of prompts ) {
+
     prompt = item.prompt;
+
     console.log("\n--- New Prompt ---\n");
-    console.log("Prompt (to " + item.provider + "): ", prompt)
+    console.log("Prompt (to " + item.provider + "): ", prompt);
+
     chatSession.setProvider( item.provider );
     response = await chatSession.chat( prompt);
-    console.log( chatSession.getDiscussion( ));
+
     console.log("Response: ", response);
-    console.log("Raw response: ", chatSession.getLastDetailedResponse(), "\n");
 }
