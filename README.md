@@ -4,7 +4,7 @@ Your LLM amiga — a lightweight multi-provider LLM plugin framework for Node.js
 
 *Amiga means friend. llamiga is your friendly bridge to every major LLM.*
 
-One interface, six providers, zero dependencies.
+One interface, six providers, few dependencies.
 
 ## What is this?
 
