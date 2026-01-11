@@ -58,6 +58,89 @@ let result1 = await gpt.ask("Explain quantum computing");
 let result1 = await local.ask("Explain quantum computing");
 ```
 
+Chat interface for discussions:
+```javascript
+import * as llAmiga  from '../src/index.mjs';
+const LASTRESPONSE = llAmiga.LASTRESPONSE;
+
+let chatSession = llAmiga.createSession( 'gemini' );
+let response, prompt;
+
+
+let prompts = [
+    "Tell me a joke",  "Tell me another joke based on the first one."
+];
+
+chatSession.setSystemMessage("You are a hilarius assistant. Remember this for each reply.");
+
+
+for( let item of prompts ) {
+    prompt = item;
+    console.log("\n--- New Prompt ---\n");
+    console.log("Prompt: ", prompt)
+    
+    response = await chatSession.chat( prompt);
+    
+    console.log( chatSession.getDiscussion( ));
+    console.log("Response: ", response);
+}
+```
+
+Chat interface with multiple providers, and mixed in TFM:
+```javascript
+import * as llAmiga  from '../src/index.mjs';
+
+const LASTRESPONSE = llAmiga.LASTRESPONSE; //Use last response as input to next LLM/FLM request
+let response, prompt;
+
+let chatSession = llAmiga.createSession( 
+    [ 
+        'gemini', 'anthropic', 'grok', 'mistral', 'openai',  //lets use all plugins in this session
+        'toolbert'          //and also our FLM "toolbert"
+    ] );
+
+
+let prompts = [
+    {
+        prompt: "Tell me a joke",
+        provider: "mistral",    
+    },
+    {
+        prompt: "tell me something amazing.",
+        provider: "openai",    
+    },
+    {
+        prompt: LASTRESPONSE,
+        provider: "toolbert",    
+    },
+    {
+        prompt: LASTRESPONSE,
+        provider: "gemini",    
+    },
+    {
+        prompt: "Reflect on the past conversation.",
+        provider: "grok"
+    }
+];
+
+chatSession.setSystemMessage("You are a hilarius assistant.");
+
+for( let item of prompts ) {
+    prompt = item.prompt;
+    
+    console.log("\n--- New Prompt ---\n");
+    console.log("Prompt (to " + item.provider + "): ", prompt)
+    
+    chatSession.setProvider( item.provider );
+    
+    response = await chatSession.chat( prompt);
+    
+    console.log( chatSession.getDiscussion( ));
+    console.log("Response: ", response);
+    console.log("Raw response: ", chatSession.getLastDetailedResponse(), "\n");
+}
+```
+
 ## Configuration
 
 Set your API keys as environment variables:
@@ -73,32 +156,14 @@ export OLLAMA_API_BASE=http://localhost:11434
 
 Only configure the providers you plan to use.
 
-## Bring your own plugin
-
-Register custom providers:
-
-```javascript
-import { registerPlugin } from '@semantictools/llamiga';
-
-registerPlugin("my-provider", {
-  ask: async (prompt) => {
-    // your implementation
-    return response;
-  }
-});
-
-const custom = getPlugin("my-provider");
-await custom.ask("Hello custom!");
-```
 
 ## Features
 
 - Unified interface across all providers
-- Streaming support
 - Conversation history
 - Token counting
 - Retries and fallback chains
-- Zero dependencies
+- Very few dependencies
 
 ## Status
 
