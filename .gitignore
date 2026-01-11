@@ -1,0 +1,9 @@
+keys
+src-wip
+attic
+.*
+!.gitignore
+*.tar
+*.tgz
+*.log
+doc-todo

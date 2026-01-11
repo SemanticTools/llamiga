@@ -1,0 +1,22 @@
+{
+  "name": "@semantictools/mnt-matcher",
+  "version": "0.8.1",
+  "description": "MNT-Matcher - NLP matching and searching library for JavaScript/Node.js",
+  "type": "module",
+  "main": "src/mntMatch.mjs",
+  "exports": {
+    ".": "./src/mntMatch.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "keywords": [
+    "mnt-matcher",
+    "indexing",
+    "search",
+    "text-search",
+    "fuzzy-search"
+  ],
+  "author": "Dusty Wilhelm Murray / Semantic Tools",
+  "license": "MIT"
+}

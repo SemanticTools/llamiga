@@ -1,0 +1,111 @@
+const pluginName = "pgOpenAINative";
+const pluginVersion = "0.0.3";
+const commands = true;
+
+import process from 'node:process';
+
+const keyName = 'OPENAI_API_KEY';
+const API_KEY = process.env[keyName];
+
+function envInit() {
+  if (!API_KEY) {
+    let error = keyName + ' environment variable is not set. Please set it to your OpenAI API key.';
+    console.error('\n❌ ' + error + "\n");
+    throw new Error(error);
+  }
+}
+
+function getDefaultModel(size = "medium") {
+  return "gpt-4o";
+}
+
+function translateRole(role, index) {
+  if (role === "assistant") return "assistant";
+  if (role === "user") return "user";
+  if (role === "system") return "system";
+  return "user";
+}
+
+async function complete(model, prompt, messages0) {
+  const maxTries = 3;
+  let retries = 0;
+
+  while (retries < maxTries) {
+    try {
+      // 1. Transform messages to OpenAI format
+      let contents = [];
+      let messages = messages0;
+      if (messages === null) messages = [];
+
+      let i = 0;
+      for (let msg of messages) {
+        if (msg.role === "local-system") {
+          continue;
+        }
+        const role = translateRole(msg.role, i);
+        contents.push({
+          role: role,
+          content: msg.content
+        });
+        i++;
+      }
+
+      // Add the current prompt
+      contents.push({
+        role: "user",
+        content: prompt
+      });
+
+      // 2. Call the OpenAI endpoint
+      const url = 'https://api.openai.com/v1/chat/completions';
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: contents
+        })
+      });
+
+      if (!response.ok) {
+        if (response.status === 429 || response.status === 500) {
+          const waitTime = 20000;
+          console.warn(`⚡ OpenAI API issue (${response.status}). Retrying...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          retries++;
+          continue;
+        }
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`OpenAI API error ${response.status}: ${JSON.stringify(errorData)}`);
+      }
+
+      const data = await response.json();
+      const aiResponse = data.choices[0].message.content;
+
+      return {
+        success: true,
+        retries: retries,
+        text: aiResponse,
+        totalTokens: data.usage?.total_tokens,
+        responseId: data.id,
+        raw: data
+      };
+
+    } catch (err) {
+      if (err.message?.includes('429') || err.message?.includes('500')) {
+        continue; // already handled above
+      }
+      console.error('❌ Error contacting OpenAI:', err.message);
+      throw err;
+    }
+  }
+}
+
+const id = pluginName;
+const version = pluginVersion;
+
+export { complete, id, version, commands, envInit, getDefaultModel };
