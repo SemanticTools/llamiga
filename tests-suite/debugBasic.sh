@@ -1,2 +1,2 @@
 . ./.env
-node tests-suite/tsBasic2.mjs
+node tests-suite/tsBasic2b.mjs

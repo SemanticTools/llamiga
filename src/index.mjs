@@ -12,75 +12,150 @@ import * as toolbert  from './flm/toolbert/pgToolbert.mjs';
 //import * as sleeplamaAI  from './llm/pgSleepingLama.mjs';
 import * as common from './llm/common/common.mjs';
 
-const plugins = {
-  ollama: ollamaAI,
-  openai: openAI,
-  anthropic: anthropic,
-  mistral: mistral,
-  grok: grok,
-  gemini: gemini,
+const g_plugins = {
+  ollama:       { plugin: ollamaAI, tags: ['llm', 'selfhosted'] },
+  openai:       { plugin: openAI, tags: ['llm', 'cloud'] },
+  anthropic:    { plugin: anthropic, tags: ['llm', 'cloud'] },
+  mistral:   { plugin: mistral, tags: ['llm', 'cloud'] },
+  grok:        { plugin: grok, tags: ['llm', 'cloud'] },
+  gemini:      { plugin: gemini, tags: ['llm', 'cloud'] },
   //sleepinglama: sleeplamaAI, needs more testing
-  toolbert: toolbert
+  toolbert:   { plugin: toolbert, tags: ['flm', 'tool'] },
 };
 
-const LASTRESPONSE = "<lastresponse>";
+const LASTRESPONSE  = "{{lastresponse}}";
+const PRUNE_ALL     = "{{pruneall}}";
+const ALL_PLUGINS   = "{{all}}";
+const ALL_CLOUD_LLM_PLUGINS = "{{cloud}}";
+const ALL_TOOL_PLUGINS = "{{tool}}";
 
+let debug = false;
+
+function setDebug( value ) {
+    //check if boolean
+    if( typeof value !== 'boolean') {
+        throw new Error( 'Debug value must be a boolean' );
+    }
+    debug = value;
+}
 
 function _getPlugin( id0 ) {
 
+  console.log( id0 );
   const id = id0.toLowerCase();
-  const plugin = plugins[id];
+  const pluginSpec = g_plugins[id];
   
-  if( !plugin ) {
+  if( !pluginSpec ) {
     throw new Error( 'No LLM/FLM/XLM plugin found: ' + id );
   }
   
-  plugin.envInit();
-  return { ...plugin, _: { id, type: "LLaMiga-API-Plugin" } };
+  try {
+    pluginSpec.plugin.envInit();
+  }
+  catch( err ) {
+    console.warn( `Warning: Plugin ${id} environment initialization failed: `, err.message );
+    //show stack
+    console.debug( err.stack );
+  }
+  return { ...pluginSpec.plugin, _: { id, type: "LLaMiga-API-Plugin" } };
 }
 
-function createObject( pluginSpecs, options = {}) {
+
+function getPluginList( specsArray ) {
+
+    console.log("getPluginList called with specs: " + JSON.stringify( specsArray   ));
+    let names = [];
+    for( let i=0; i<specsArray.length; i++ ) {
+        let spec = specsArray[i];
+
+        if( spec == ALL_PLUGINS ) {
+            return names.concat( Object.keys( g_plugins ) );
+        }
+        else if( spec == ALL_CLOUD_LLM_PLUGINS ) {
+            for( let key of Object.keys( g_plugins )) {
+                let p = g_plugins[ key ];
+                if( p.tags.includes( 'llm' ) && p.tags.includes( 'cloud' )) {
+                    names.push( key );
+                }
+            }
+        }
+        else if ( spec == ALL_TOOL_PLUGINS ) {
+            for( let key of Object.keys( g_plugins )) {
+                let p = g_plugins[ key ];
+                if( p.tags.includes( 'tool' )) {
+                    names.push( key );
+                }
+            }
+        }
+        else {
+            names.push( spec );
+        }
+    }
+    return names;
+
+}
+
+function createObject( pluginSpecs0, options = {}) {
 
     let plugins = [];
     let pluginIndex = {};
     let pluginModels = {};
+    let pluginConfigs = {};
     let plugin = null;
     let pluginName = "empty";
     let model = null;
-    let macros = false;
+    let macros = true;
+    let pluginSpecs;
 
-    if( options && options.macros ) macros = true;
+    if( !Array.isArray( pluginSpecs0 )) {
+        pluginSpecs = getPluginList( [ pluginSpecs0 ] );
+    }
+    else 
+    {
+        pluginSpecs = getPluginList( pluginSpecs0 );
+    }
+
+    console.log( "Using plugins: " + JSON.stringify( pluginSpecs ) );
+
+    if( options && options.macros !== undefined ) macros = options.macros;
 
     if( Array.isArray( pluginSpecs )) {
         if( pluginSpecs.length === 0 ) {
             throw new Error( 'Plugin array is empty' );
         }
         for( let i=0; i<pluginSpecs.length; i++ ) {
+            console.log( "Initializing plugin: '" + pluginSpecs[i] + "'" )
             let p = _getPlugin( pluginSpecs[i] );
+            console.log( "Initialized plugin: '" , p , "'" )
             plugins.push( p );
             pluginIndex[ p._.id ] = p;
             pluginModels[ p._.id ] = p.getDefaultModel();
         }
 
-        plugin = plugins[0];
-        pluginName = pluginSpecs[0];
-        model = plugin.getDefaultModel();
+        plugin = null;
+        pluginName = null;
+        model = null;
+
+        if( plugins.length == 1 ) {
+            plugin = plugins[0];
+            pluginName = pluginSpecs[0];
+            model = plugin.getDefaultModel();
+        }
     }
     else {
-        plugin = _getPlugin( pluginSpecs );
-        plugins.push( plugin );
-        pluginName = pluginSpecs;
-        model = plugin.getDefaultModel();
+        throw new Error( 'Plugin specs must be an array, internal error' );
     }
 
     let session = {
         pluginIndex: pluginIndex,
+        pluginConfigs: {},
         plugins: plugins,
         plugin: plugin,
         pluginName: pluginName,
         pluginModels: pluginModels,
+
         context: {},
-        model: plugin.getDefaultModel(),
+        model: model,
         discussion: [],
         lastResponse: "sorry, there is no response yet",
         macros: macros,
@@ -140,34 +215,48 @@ function createObject( pluginSpecs, options = {}) {
                 this.discussion.push( message );
             }            
         },        
-        ask: async function( prompt, overrideModel ) {
+        ask: async function( prompt0, overrideModel ) {
 
-            return await this._rawChat( prompt, null, overrideModel );
+            let prompt = this._promptMacros( prompt0 );
+
+            if(! this.plugin ) {
+                throw new Error( 'No plugin selected. Use setProvider() to select a plugin.' );
+            }
+            let config = this.getConfig( this.plugin._.id, this.model );
+            return await this._rawChat( prompt, null, overrideModel, config );
         },
-        rawAsk: async function( prompt, discussion, overrideModel ) {
+        rawChat: async function( prompt, discussion, overrideModel, overrideConfig ) {
 
-            return await this._rawChat( prompt, discussion, overrideModel );
-        },         
-        mixChat: async function( prompt, discussion, overrideModel ) {
+            return await this._rawChat( prompt, discussion, overrideModel, overrideConfig );
+        },      
+        _promptMacros: function( prompt ) {
+            if( this.macros ) {
+                prompt = prompt.replaceAll( LASTRESPONSE, this.lastResponse );
+            }
+            return prompt;
+        },   
+        chat: async function( prompt0, overrideModel ) {
 
-            let result = await this._rawChat( prompt, this.discussion, overrideModel );
+            let prompt = this._promptMacros( prompt0 );
+
+            if(! this.plugin ) {
+                throw new Error( 'No plugin selected. Use setProvider() to select a plugin.' );
+            }
+
+            let config = this.getConfig( this.plugin._.id, this.model );
+            let result = await this._rawChat( prompt, this.discussion, overrideModel, config );
             if( result ) {
                this.addMessage( 'user', prompt );
                this.addMessage( 'assistant', result.text );
             }
+            delete result.actualPrompt;
             return result;
         },
-        chat: async function( prompt, overrideModel ) {
+        _rawChat: async function( prompt, discussion, overrideModel, config ) {
 
-            let result = await this._rawChat( prompt, this.discussion, overrideModel );
-            if( result ) {
-               this.addMessage( 'user', prompt );
-               this.addMessage( 'assistant', result.text );
+            if(! this.plugin ) {
+                throw new Error( 'No plugin selected. Use setProvider() to select a plugin.' );
             }
-            return result;
-        },
-        _rawChat: async function( prompt0, discussion, overrideModel ) {
-
             let timing = common.getTiming();
             let startDate = new Date().toISOString();
             let model = this.model;
@@ -175,14 +264,13 @@ function createObject( pluginSpecs, options = {}) {
                 model = overrideModel;
             }
 
-            let prompt = prompt0;
-            if( prompt === LASTRESPONSE && this.macros ) prompt = this.lastResponse;
-
             let result = 
                 await this.plugin.complete( 
                     model, 
                     prompt, 
-                    discussion );
+                    discussion,
+                    config 
+                );
 
             if( result.success ) {
                
@@ -202,39 +290,76 @@ function createObject( pluginSpecs, options = {}) {
         getDiscussion: function() {
 
             return this.discussion;
-        }   
+        },
+        pruneDiscussion: function( index ) {
+            if( index == PRUNE_ALL ) {
+                this.discussion = [];
+            }
+            else if( index >= 0 && index < this.discussion.length ) {
+                this.discussion = this.discussion.slice( index , 1 );
+            }
+        },
+        getConfig: function( plugin, model ) {
+            let key1 = plugin + "::" + model;
+            let key2 = plugin + "::" + model;
 
+            if( this.pluginConfigs[ key1 ] !== undefined ) {
+                return this.pluginConfigs[ key1 ];
+            }
+            if( this.pluginConfigs[ key2 ] !== undefined ) {
+                return this.pluginConfigs[ key2 ];
+            }
+            return undefined;
+        },
+        setConfig: function( plugin, p1, p2 ) {
+
+            let model = "";
+            let value = null;
+            if( p2 === undefined ) {
+                model = "*";
+                value = p1;
+            }
+            else {
+                model = p1;
+                value = p2;
+            }
+                
+            if( this.pluginIndex[ plugin  ] ) {
+                this.pluginConfigs[ plugin + "::" + model ] = value;
+            }
+            else {
+                throw new Error( 'No plugin found with name: ' + plugin );
+            }
+        }
+        ,
+        clearConfig: function( plugin, p1 ) {
+
+            let model = "";
+            if( p2 === undefined ) {
+                model = "*";
+            }
+            else {
+                model = p1;
+            }
+                
+            if( this.pluginIndex[ plugin  ] ) {
+                delete this.pluginConfigs[ plugin + "::" + model ];
+            }
+            else {
+                throw new Error( 'No plugin found with name: ' + plugin );
+            }
+        }        
     };
     
     return session;
 }
 
 function createSession( pluginSpecs, options = {} ) {
-    
+
     let object = createObject( pluginSpecs, options );
 
-    delete object.ask;
-    delete object.rawAsk;  
-
     return object;
 }
 
-function getPlugin( pluginName ) {
 
-    if( typeof pluginName !== 'string' ) {
-        throw new Error( 'Plugin name must be a string' );
-    }
-
-    let object = createObject( pluginName );
-
-    delete object.chat;
-    delete object.mixChat;
-    delete object.getDiscussion;
-    delete object.setProvider;
-    delete object.addMessage;
-    delete object.setSystemMessage;
-
-    return object;
-}
-
-export { createSession, getPlugin, LASTRESPONSE };
+export { createSession, getPluginList, setDebug, LASTRESPONSE, PRUNE_ALL, ALL_PLUGINS };

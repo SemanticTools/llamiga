@@ -36,7 +36,7 @@ const fantasyPrompts = [
 function envInit() {}
 function getDefaultModel() { return "toolbert-v0-english"; }
   
-async function complete( model, prompt, messages ) {
+async function complete( model, prompt, messages, config={} ) {
 
     let wordCount = prompt.split(" ").length;
     let origPrompt = messages[0].content;
@@ -80,7 +80,6 @@ async function complete( model, prompt, messages ) {
         }
       };
     }    
-
 
     addInputWords( prompt );
     const singleSentence = generateRandomSentence();

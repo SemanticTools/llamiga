@@ -29,7 +29,7 @@ function translateRole(role, index) {
   return "user";
 }
 
-async function complete(model, prompt, messages0) {
+async function complete(model, prompt, messages0, config={}) {
   const maxTries = 3;
   let retries = 0;
 

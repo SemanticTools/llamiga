@@ -2,7 +2,11 @@ import * as llAmiga  from '../src/index.mjs';
 
 const LASTRESPONSE = llAmiga.LASTRESPONSE;
 
-let chatSession = llAmiga.createSession( llAmiga.ALL_PLUGINS );
+throw "Not yet implemented!";
+
+let chatSession = llAmiga.createSession( llAmiga.ALL_PLUGINS, 
+    { macros: true } //allows the use of LASTRESPONSE in prompts
+ );
 let response, prompt;
 
 
