@@ -115,20 +115,36 @@ session.pruneDiscussion(llAmiga.PRUNE_ALL);
 session.pruneDiscussion(2);
 ```
 
-## Plugin Configuration
+## Plugin Configuration for a LLM Council session
 
-Pass provider-specific settings:
+Pass plugin-specific settings: (minimal support for this version)
 
 ```javascript
-session.setConfig('openai', {
-    temperature: 0.7,
-    maxTokens: 500
+
+//Example for the "Councillius" plugin which uses config
+
+const members = [
+    "gemini::gemini-2.0-flash",
+    "openai::gpt-4-turbo"     , 
+    "anthropic::claude-sonnet-4-20250514"  
+];
+
+const judge = "mistral::mistral-medium-latest";
+const council = "councillius::default";
+const toolbert = "toolbert::default";
+
+/* Set up the council, it's members, it's judge, and the templates */
+session.setConfig('councillius', {
+    members: members,
+    judge: judge,
+    judgementRequest:   "Evaluate each of the responses. The question was {{MEMBER-PROMPT}}",
+    judgementItem:      "\n\nResponse from '{{MEMBER-NAME}}':\n{{MEMBER-RESPONSE}}\n\n",
 });
 
-// Model-specific config
-session.setConfig('anthropic', 'claude-sonnet-4-20250514', {
-    temperature: 0.9
-});
+let response = await session.ask( council, "Try your best joke!");
+
+console.log("The best joke was: " + response.text );
+
 ```
 
 ## Response Metadata
@@ -205,7 +221,6 @@ let session = llAmiga.createSession(llAmiga.ALL_PLUGINS);
 | `PRUNE_ALL` | Clear all discussion history |
 | `ALL_PLUGINS` | All available plugins |
 | `ALL_CLOUD_LLM_PLUGINS` | All cloud LLM plugins |
-| `ALL_TEST_PLUGINS` | Test plugins only |
 | `ALL_GROUP_PLUGINS` | Group/ensemble plugins |
 
 ## Status
