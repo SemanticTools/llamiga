@@ -171,4 +171,5 @@ Beta — API may evolve.
 
 ## License
 
-MIT © Dusty Wilhelm Murray / Semantic Tools
+Apache 2.0 — see [LICENSE](LICENSE) for details.
+Notices (if any) are in `NOTICE`.

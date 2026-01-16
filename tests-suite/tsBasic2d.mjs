@@ -46,21 +46,20 @@ let chatSession = llAmiga.createSession(
     ]
 );
 
-chatSession.setConfig( "councillius", councilliusConfig );
+console.log("Running chained 'ask' session with Toolbert and Councillius\n");
 
-let random = await chatSession.ask( 
-    toolbert,
-    "dogs, cats, hair, music, sports, science",
-);
+response = await chatSession.chain()
 
-response = await chatSession.ask(  
-    council,
-    "You are a hilarius assistant." + 
-    "You make unpredictable jokes." +
-    "Here is some inspiration: " + random.text + "\n\n" + 
-    "Tell me a funny joke." ,
-    councilliusConfig
-);
+    .ask( toolbert, "dogs, cats, hair, music, sports, science" )
+    .ask(    
+            council,
+            "You are a hilarius assistant." + 
+            "You make unpredictable jokes." +
+            "Here is some inspiration: {{LASTRESPONSE}}\n\n" + 
+            "Tell me a funny joke.",
+            councilliusConfig
+    )
 
-console.log("A collectively best joke: ", response.text );
+    .runAll();
 
+console.log("A collectively best joke: \n\n", response.text );
