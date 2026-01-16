@@ -1,169 +1,212 @@
 # llamiga
 
-Your LLM amiga — a lightweight multi-provider LLM plugin framework for Node.js.
+Your LLM amiga — a lightweight multi-provider LLM framework for Node.js.
 
-*Amiga means friend. llamiga is your friendly bridge to every major LLM.*
+One interface. Six providers. Minimal dependencies.
 
-One interface, six providers, few dependencies.
-
-## What is this?
-
-llamiga lets you talk to any major LLM provider through a unified API. Swap providers with one line. Bring your own plugins. Keep it simple.
-
-## Supported providers
-
-**LLMs:**
-- Claude (Anthropic)
-- GPT (OpenAI)
-- Gemini (Google)
-- Mistral
-- Grok (xAI)
-- Ollama (self-hosted LLAMAs)
-
-**FLMs (Fake Language Models):**
-- Toolbert — an auto-feedback plugin that reviews and nudges LLM outputs
-
-FLMs use the same interface as LLMs but don't pretend to be large language models. They're logic, rules, personality — no neural nets.
-
-## Installation
+## Quick Start
 
 ```bash
 npm install @semantictools/llamiga
 ```
 
-## Usage
-
 ```javascript
-import * as llAmiga  from '../src/index.mjs';
+import * as llAmiga from '@semantictools/llamiga';
 
-let geminiPG = llAmiga.getPlugin('gemini');
-console.log("Plugin default model: " , geminiPG.getModel());
-
-let response = await geminiPG.ask("Hello, how are you?");
-if( response.success ) {
-    console.log("Gemini response: ", response.text );
-}
+// Create a session, ask a question
+let session = llAmiga.createSession('gemini');
+let response = await session.ask("What is the capital of France?");
+console.log(response.text);
 ```
 
-Switch providers instantly:
-
-```javascript
-const gemini = llAmiga.getPlugin("gemini");
-const gpt = llAmiga.getPlugin("openai");
-const local = llAmiga.getPlugin("ollama");
-
-// Same interface, different minds
-let result1 = await gemini.ask("Explain quantum computing");
-let result1 = await gpt.ask("Explain quantum computing");
-let result1 = await local.ask("Explain quantum computing");
-```
-
-Chat interface for discussions:
-```javascript
-import * as llAmiga  from '../src/index.mjs';
-const LASTRESPONSE = llAmiga.LASTRESPONSE;
-
-let chatSession = llAmiga.createSession( 'gemini' );
-let response, prompt;
-
-
-let prompts = [
-    "Tell me a joke",  "Tell me another joke based on the first one."
-];
-
-chatSession.setSystemMessage("You are a hilarius assistant. Remember this for each reply.");
-
-
-for( let item of prompts ) {
-    prompt = item;
-    console.log("\n--- New Prompt ---\n");
-    console.log("Prompt: ", prompt)
-    
-    response = await chatSession.chat( prompt);
-    
-    console.log( chatSession.getDiscussion( ));
-    console.log("Response: ", response);
-}
-```
-
-Chat interface with multiple providers, and mixed in TFM:
-```javascript
-import * as llAmiga  from '../src/index.mjs';
-
-const LASTRESPONSE = llAmiga.LASTRESPONSE; //Use last response as input to next LLM/FLM request
-let response, prompt;
-
-let chatSession = llAmiga.createSession( 
-    [ 
-        'gemini', 'anthropic', 'grok', 'mistral', 'openai',  //lets use all plugins in this session
-        'toolbert'          //and also our FLM "toolbert"
-    ] );
-
-
-let prompts = [
-    {
-        prompt: "Tell me a joke",
-        provider: "mistral",    
-    },
-    {
-        prompt: "tell me something amazing.",
-        provider: "openai",    
-    },
-    {
-        prompt: LASTRESPONSE,
-        provider: "toolbert",    
-    },
-    {
-        prompt: LASTRESPONSE,
-        provider: "gemini",    
-    },
-    {
-        prompt: "Reflect on the past conversation.",
-        provider: "grok"
-    }
-];
-
-chatSession.setSystemMessage("You are a hilarius assistant.");
-
-for( let item of prompts ) {
-    prompt = item.prompt;
-    
-    console.log("\n--- New Prompt ---\n");
-    console.log("Prompt (to " + item.provider + "): ", prompt)
-    
-    chatSession.setProvider( item.provider );
-    
-    response = await chatSession.chat( prompt);
-    
-    console.log( chatSession.getDiscussion( ));
-    console.log("Response: ", response);
-    console.log("Raw response: ", chatSession.getLastDetailedResponse(), "\n");
-}
-```
+That's it. Swap `'gemini'` for `'openai'`, `'anthropic'`, `'mistral'`, `'grok'`, or `'ollama'` — same code, different brain.
 
 ## Configuration
 
-Set your API keys as environment variables:
+Set API keys for the providers you want to use:
 
 ```bash
-export ANTHROPIC_API_KEY=your-key
-export OPENAI_API_KEY=your-key
-export GOOGLE_API_KEY=your-key
-export MISTRAL_API_KEY=your-key
-export GROK_API_KEY=your-key
-export OLLAMA_API_BASE=http://localhost:11434
+export GOOGLE_API_KEY=your-key      # Gemini
+export OPENAI_API_KEY=your-key      # GPT
+export ANTHROPIC_API_KEY=your-key   # Claude
+export MISTRAL_API_KEY=your-key     # Mistral
+export GROK_API_KEY=your-key        # Grok
+export OLLAMA_API_BASE=http://localhost:11434  # Ollama (self-hosted)
 ```
 
-Only configure the providers you plan to use.
+## Conversations
 
+Use `chat()` to maintain conversation history:
 
-## Features
+```javascript
+let session = llAmiga.createSession('openai');
 
-- Unified interface across all providers
-- Conversation history
-- Token counting
-- Retries and fallback chains
-- Very few dependencies
+session.setSystemMessage("You are a helpful cooking assistant.");
+
+let r1 = await session.chat("What's a good pasta dish?");
+console.log(r1.text);
+
+let r2 = await session.chat("How do I make the sauce?");
+console.log(r2.text);  // Remembers you were talking about pasta
+```
+
+## Multiple Providers in One Session
+
+Load multiple providers and switch between them:
+
+```javascript
+let session = llAmiga.createSession(['gemini', 'anthropic', 'openai']);
+
+// One-off questions to specific providers
+let r1 = await session.chat('gemini', "Explain quantum computing");
+let r2 = await session.chat('anthropic', "Now explain it simpler");
+let r3 = await session.chat('openai', "Give me an analogy");
+
+// Or set a default and use that
+session.setLM('anthropic');
+let r4 = await session.chat("Thanks!");
+```
+
+## Chaining
+
+Chain multiple providers together:
+
+```javascript
+const LASTRESPONSE = llAmiga.LASTRESPONSE;
+
+let session = llAmiga.createSession(['mistral', 'gemini']);
+
+let response = await session.chain()
+    .ask('mistral', "Write a haiku about coding")
+    .ask('gemini', LASTRESPONSE + " — now critique this haiku")
+    .runAll();
+
+console.log(response.text);
+```
+
+The `LASTRESPONSE` macro injects the previous response into your prompt.
+
+## Selecting Models
+
+Specify a model with `provider::model` syntax:
+
+```javascript
+session.setLM('openai::gpt-4o');
+session.setLM('anthropic::claude-sonnet-4-20250514');
+
+// Or inline
+let response = await session.chat('gemini::gemini-2.0-flash', "Hello!");
+```
+
+## Managing the Discussion
+
+```javascript
+// Add messages manually
+session.addMessage('user', 'What about dessert?');
+session.addMessage('assistant', 'I recommend tiramisu.');
+
+// View the full conversation
+console.log(session.getDiscussion());
+
+// Clear history
+session.pruneDiscussion(llAmiga.PRUNE_ALL);
+
+// Remove a specific message by index
+session.pruneDiscussion(2);
+```
+
+## Plugin Configuration
+
+Pass provider-specific settings:
+
+```javascript
+session.setConfig('openai', {
+    temperature: 0.7,
+    maxTokens: 500
+});
+
+// Model-specific config
+session.setConfig('anthropic', 'claude-sonnet-4-20250514', {
+    temperature: 0.9
+});
+```
+
+## Response Metadata
+
+Every response includes useful metadata:
+
+```javascript
+let response = await session.ask("Hello");
+
+console.log(response.text);        // The actual response
+console.log(response.success);     // true/false
+console.log(response.model);       // Model used
+console.log(response.pluginName);  // Provider name
+console.log(response.elapsedMS);   // Response time
+console.log(response.totalTokens); // Token count (when available)
+```
+
+## Supported Providers
+
+| Provider | Plugin ID | Type |
+|----------|-----------|------|
+| Google Gemini | `gemini` | Cloud LLM |
+| OpenAI GPT | `openai` | Cloud LLM |
+| Anthropic Claude | `anthropic` | Cloud LLM |
+| Mistral | `mistral` | Cloud LLM |
+| xAI Grok | `grok` | Cloud LLM |
+| Ollama | `ollama` | Self-hosted |
+| Toolbert | `toolbert` | FLM (tool) |
+| Councillius | `councillius` | XLM (group) |
+
+**FLM** = Fake Language Model — same interface, but logic/rules instead of neural nets.
+
+## Plugin Groups
+
+Load multiple plugins at once:
+
+```javascript
+// All cloud LLMs
+let session = llAmiga.createSession(llAmiga.ALL_CLOUD_LLM_PLUGINS);
+
+// Everything
+let session = llAmiga.createSession(llAmiga.ALL_PLUGINS);
+```
+
+## API Reference
+
+### Session Methods
+
+| Method | Description |
+|--------|-------------|
+| `ask(prompt)` | Single question, no history |
+| `ask(provider, prompt)` | Single question to specific provider |
+| `chat(prompt)` | Question with conversation history |
+| `chat(provider, prompt)` | Chat with specific provider |
+| `setLM(provider)` | Set active provider |
+| `setLM(provider::model)` | Set provider and model |
+| `getModel()` | Get current model |
+| `getProviderName()` | Get current provider |
+| `setSystemMessage(msg)` | Set system prompt |
+| `addMessage(role, content)` | Add to conversation (role: user/assistant/system) |
+| `getDiscussion()` | Get conversation history |
+| `pruneDiscussion(index)` | Remove message at index |
+| `pruneDiscussion(PRUNE_ALL)` | Clear all history |
+| `setConfig(plugin, config)` | Set provider config |
+| `getConfig(plugin, model)` | Get provider config |
+| `chain()` | Start a chain |
+| `runAll()` | Execute chain |
+
+### Constants
+
+| Constant | Description |
+|----------|-------------|
+| `LASTRESPONSE` | Macro for previous response text |
+| `PRUNE_ALL` | Clear all discussion history |
+| `ALL_PLUGINS` | All available plugins |
+| `ALL_CLOUD_LLM_PLUGINS` | All cloud LLM plugins |
+| `ALL_TEST_PLUGINS` | Test plugins only |
+| `ALL_GROUP_PLUGINS` | Group/ensemble plugins |
 
 ## Status
 
