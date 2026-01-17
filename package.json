@@ -1,22 +1,18 @@
 {
   "name": "@semantictools/llamiga",
-  "version": "0.8.1",
-  "description": "LLaMiga is a lightweight framework to connect to and interact with LLMs (Large Language Models) such as OpenAI's GPT series, Anthropic's Claude, and others. It provides a simple and flexible interface for making API calls, handling responses, and managing conversations with these models.",
-  "type": "module",
+  "version": "0.8.0",
+  "description": "Your LLM amiga — one interface to OpenAI, Anthropic, Google, Mistral, xAI, and Ollama",
   "main": "src/index.mjs",
   "exports": {
     ".": "./src/index.mjs"
+  },  
+  "type": "module",
+  "keywords": ["llm", "ai", "chat", "complete", "openai", "anthropic", "gemini", "mistral", "grok", "ollama", "large language model"],
+  "author": "Dusty Wilhelm Murray",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/semantictools/llamiga"
   },
-  "files": [
-    "src"
-  ],
-  "keywords": [
-    "llm",
-    "ai",
-    "chat",
-    "complete",
-    "large language model"
-  ],
-  "author": "Dusty Wilhelm Murray / Semantic Tools",
-  "license": "MIT"
+  "files": ["src", "README.md", "LICENSE", "NOTICE"]
 }

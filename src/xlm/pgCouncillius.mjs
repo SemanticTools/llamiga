@@ -17,7 +17,7 @@ limitations under the License.
 
 
 const pluginName = "pgCouncillius";
-const pluginVersion = "0.0.3";
+const pluginVersion = "0.0.5";
 const commands = true;
 
 const debug = false;
