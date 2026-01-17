@@ -7,5 +7,7 @@ attic
 *.tgz
 *.log
 doc-todo
+/node_modules
 !/.debug
 !/.vscode
+
