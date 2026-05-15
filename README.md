@@ -21,12 +21,18 @@ console.log(response.text);
 
 That's it. Swap `'gemini'` for `'openai'`, `'anthropic'`, `'mistral'`, `'grok'`, or `'ollama'` — same code, different brain.
 
+## What's New in 0.9
+
+- **Unified error taxonomy** — every provider failure throws an `Error` with `.code` (one of `RATE_LIMIT`, `QUOTA_EXHAUSTED`, `AUTH`, `CLIENT`, `SERVER`, `NETWORK`), so you can handle each case distinctly without parsing message strings. Raw upstream data attached via `.raw.headers` / `.raw.responseBody` / `.cause`. See [Error Handling](#error-handling).
+- **Configurable retry** — exponential backoff with jitter, `Retry-After` honored, `onRetry` hook, total-time budget. Non-retryable categories (`AUTH`, `QUOTA_EXHAUSTED`, `CLIENT`) fail fast instead of burning attempts. See [Retry Configuration](#retry-configuration).
+- **Session-wide / per-plugin / per-model config** via `setConfig` arity polymorphism — `setConfig({...})` applies to every provider in the session; `setConfig('openai', {...})` to one provider; `setConfig('openai', 'gpt-4o', {...})` to a single model. See [Plugin Configuration](#plugin-configuration).
+
 ## Configuration
 
 Set API keys for the providers you want to use:
 
 ```bash
-export GOOGLE_API_KEY=your-key      # Gemini
+export GEMINI_API_KEY=your-key      # Gemini
 export OPENAI_API_KEY=your-key      # GPT
 export ANTHROPIC_API_KEY=your-key   # Claude
 export MISTRAL_API_KEY=your-key     # Mistral
@@ -115,9 +121,26 @@ session.pruneDiscussion(llAmiga.PRUNE_ALL);
 session.pruneDiscussion(2);
 ```
 
-## Plugin Configuration for a LLM Council session
+## Plugin Configuration
 
-Pass plugin-specific settings: (minimal support for this version)
+Pass settings into `setConfig` at three scopes — session-wide, per-plugin, or per (plugin, model) — by varying the arity:
+
+```javascript
+// 1-arg form: applies to every plugin in this session
+session.setConfig({ retry: { maxAttempts: 5 } });
+
+// 2-arg form: applies to all models of one plugin
+session.setConfig('openai', { retry: { maxAttempts: 5 } });
+
+// 3-arg form: applies only to one (plugin, model) pair
+session.setConfig('anthropic', 'claude-3-opus-20240229', {
+    retry: { maxAttempts: 8, maxMs: 60000 },
+});
+```
+
+`getConfig` and `clearConfig` follow the same arity pattern. See [Retry Configuration](#retry-configuration) below for the retry-block specifics.
+
+### Example: Councillius plugin
 
 ```javascript
 
@@ -161,6 +184,106 @@ console.log(response.pluginName);  // Provider name
 console.log(response.elapsedMS);   // Response time
 console.log(response.totalTokens); // Token count (when available)
 ```
+
+## Error Handling
+
+When a provider call fails, llamiga throws an `Error` with a `.code` field you can switch on, plus the raw upstream data attached for manual inspection:
+
+```javascript
+try {
+    let response = await session.ask("Hello");
+} catch (e) {
+    switch (e.code) {
+        case 'AUTH':              // bad / missing / expired API key
+        case 'QUOTA_EXHAUSTED':   // account credits / token budget gone
+        case 'CLIENT':            // bad request, unknown model, payload too large
+            console.error(e.message);
+            break;
+        case 'RATE_LIMIT':        // already retried with backoff; surfaced after exhaustion
+        case 'SERVER':            // 5xx, also already retried
+        case 'NETWORK':           // fetch failure, already retried
+            console.error('Transient failure after retries:', e.message);
+            break;
+    }
+
+    // For manual handling:
+    console.log(e.status);              // HTTP status (null for NETWORK)
+    console.log(e.provider);            // 'Anthropic', 'OpenAI', etc.
+    console.log(e.raw?.headers);        // response headers (retry-after, x-request-id, etc.)
+    console.log(e.raw?.responseBody);   // parsed body the provider returned
+    console.log(e.cause);               // underlying Error if any (fetch throw, JSON parse failure)
+}
+```
+
+| Code | Meaning | Retried? |
+|------|---------|----------|
+| `RATE_LIMIT` | Provider throttled us (HTTP 429) | yes |
+| `QUOTA_EXHAUSTED` | Account credits / token budget exhausted | **no** |
+| `AUTH` | Bad / missing / expired API key (401, 403) | no |
+| `CLIENT` | Bad request, unknown model, payload too large, etc. (4xx) | no |
+| `SERVER` | Provider down or overloaded (5xx) | yes |
+| `NETWORK` | `fetch` threw — DNS, TCP reset, timeout | yes |
+
+The error message is prefixed with `[Provider/model]` so logs identify the source immediately.
+
+## Retry Configuration
+
+Every provider call runs through a retry helper. Defaults are safe; everything is overridable per session, per plugin, per (plugin, model).
+
+```javascript
+// Library defaults
+{
+    maxAttempts: 3,
+    backoff: 'exponential',                          // or 'fixed'
+    baseMs: 1000,
+    maxMs: 30000,
+    jitter: true,                                    // ±25% randomization
+    honorRetryAfter: true,                           // honor server's Retry-After header
+    retryOn: ['RATE_LIMIT', 'SERVER', 'NETWORK'],    // never AUTH/QUOTA_EXHAUSTED/CLIENT
+    totalTimeoutMs: null,                            // optional hard ceiling across attempts
+    onRetry: null,                                   // ({attempt, error, delayMs}) => {} hook
+}
+```
+
+Configs are merged in this order (last writer wins, shallow over the `retry` block):
+
+```
+library defaults
+  ↓
+plugin.defaultRetry           (e.g. Ollama uses baseMs: 20000 for cold-load)
+  ↓
+session-wide config           setConfig({ retry: {...} })
+  ↓
+plugin-wide config            setConfig('openai', { retry: {...} })
+  ↓
+plugin+model config           setConfig('openai', 'gpt-4o', { retry: {...} })
+```
+
+### Examples
+
+```javascript
+// Apply the same retry policy across every provider in this session
+session.setConfig({ retry: { maxAttempts: 5 } });
+
+// Disable retry entirely (fail fast)
+session.setConfig({ retry: false });
+
+// Custom retry for one slow model
+session.setConfig('anthropic', 'claude-3-opus-20240229', {
+    retry: { maxAttempts: 8, maxMs: 60000 },
+});
+
+// Observe retries
+session.setConfig({
+    retry: {
+        onRetry: ({ attempt, error, delayMs }) => {
+            console.log(`retry ${attempt} after ${error.code}, waiting ${delayMs}ms`);
+        },
+    },
+});
+```
+
+`Retry-After` response headers are honored (capped at `maxMs`). `onRetry` failures are swallowed — they cannot break the retry loop.
 
 ## Supported Providers
 
@@ -208,8 +331,15 @@ let session = llAmiga.createSession(llAmiga.ALL_PLUGINS);
 | `getDiscussion()` | Get conversation history |
 | `pruneDiscussion(index)` | Remove message at index |
 | `pruneDiscussion(PRUNE_ALL)` | Clear all history |
-| `setConfig(plugin, config)` | Set provider config |
-| `getConfig(plugin, model)` | Get provider config |
+| `setConfig(config)` | Set session-wide config (all plugins, all models) |
+| `setConfig(plugin, config)` | Set provider config (all models for that plugin) |
+| `setConfig(plugin, model, config)` | Set provider+model config |
+| `getConfig()` | Get session-wide config |
+| `getConfig(plugin)` | Get provider config (with fallback to session-wide) |
+| `getConfig(plugin, model)` | Get provider+model config (with fallback chain) |
+| `clearConfig()` | Clear session-wide config |
+| `clearConfig(plugin)` | Clear provider config |
+| `clearConfig(plugin, model)` | Clear provider+model config |
 | `chain()` | Start a chain |
 | `runAll()` | Execute chain |
 

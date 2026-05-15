@@ -18,13 +18,19 @@ limitations under the License.
 /* OLlama Plugin for OLLAMA running on a (private) server */
 
 const pluginName = "pgOLlamaNative";
-const pluginVersion = "0.0.3";
+const pluginVersion = "0.0.4";
 const commands = true;
+const providerName = "Ollama";
 
 import process from 'node:process';
+import { withRetry } from './common/retry.mjs';
+import { classifyHttpError, classifyNetworkError } from './common/errors.mjs';
 
 const keyName = 'OLLAMA_API_BASE';
 const API_BASE = process.env[keyName];
+
+// Local server cold-loads can take a while; baseline waits longer than the library default.
+export const defaultRetry = { baseMs: 20000 };
 
 function envInit() {
   if (!API_BASE) {
@@ -42,110 +48,87 @@ function translateRole(role, index) {
   if (role === "assistant") return "assistant";
   if (role === "user") return "user";
   if (role === "system" && index === 0) return "system";
-  if (role === "system") return "user"; // subsequent system messages become user
+  if (role === "system") return "user";
   return "user";
 }
 
 async function complete(model, prompt, messages0, config={}) {
-  const maxTries = 3;
-  let retries = 0;
+  return withRetry(async ({ attempt }) => {
+    let contents = [];
+    let messages = messages0;
+    if (messages === null) messages = [];
 
-  while (retries < maxTries) {
-    try {
-      // 1. Transform messages to Ollama format
-      let contents = [];
-      let messages = messages0;
-      if (messages === null) messages = [];
-
-      let i = 0;
-      for (let msg of messages) {
-        if (msg.role === "local-system") {
-          continue;
-        }
-        const role = translateRole(msg.role, i);
-        contents.push({
-          role: role,
-          content: msg.content
-        });
-        i++;
+    let i = 0;
+    for (let msg of messages) {
+      if (msg.role === "local-system") {
+        continue;
       }
-
-      // Add the current prompt
-      contents.push({
-        role: "user",
-        content: prompt
-      });
-
-      // 2. Call the Ollama endpoint
-      const url = API_BASE + '/api/chat';
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: model,
-          messages: contents
-        })
-      });
-
-      if (!response.ok) {
-        if (response.status === 429 || response.status === 500) {
-          const waitTime = 20000;
-          console.warn(`⚡ Ollama API issue (${response.status}). Retrying...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          retries++;
-          continue;
-        }
-        const errorData = await response.text().catch(() => '');
-        throw new Error(`Ollama API error ${response.status}: ${errorData}`);
-      }
-
-      // 3. Parse streaming NDJSON response
-      const responseData = await response.text();
-      const jsonObjects = responseData.split('\n');
-
-      let fullResponseText = '';
-      let totalTokens = 0;
-      let rawData = null;
-
-      for (const jsonObject of jsonObjects) {
-        try {
-          if (jsonObject.trim() === '') {
-            continue;
-          }
-          const parsedObject = JSON.parse(jsonObject);
-          if (parsedObject.message) {
-            fullResponseText += parsedObject.message.content;
-          }
-          if (parsedObject.done) {
-            rawData = parsedObject;
-            totalTokens = (parsedObject.prompt_eval_count || 0) + (parsedObject.eval_count || 0);
-          }
-        } catch (error) {
-          console.error('Error parsing JSON object:', error, jsonObject);
-        }
-      }
-
-      const aiResponse = fullResponseText.trim();
-
-      return {
-        success: true,
-        retries: retries,
-        text: aiResponse,
-        totalTokens: totalTokens,
-        raw: rawData
-      };
-
-    } catch (err) {
-      if (err.message?.includes('429') || err.message?.includes('500')) {
-        continue; // already handled above
-      }
-      console.error('❌ Error contacting Ollama:', err.message);
-      throw err;
+      const role = translateRole(msg.role, i);
+      contents.push({ role: role, content: msg.content });
+      i++;
     }
-  }
+
+    contents.push({ role: "user", content: prompt });
+
+    const url = API_BASE + '/api/chat';
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: model, messages: contents })
+      });
+    } catch (fetchErr) {
+      throw classifyNetworkError(fetchErr, providerName, model);
+    }
+
+    if (!response.ok) {
+      let parsedBody;
+      let parseError;
+      try {
+        parsedBody = await response.json();
+      } catch (e) {
+        parseError = e;
+        try { parsedBody = await response.text(); } catch { parsedBody = null; }
+      }
+      throw classifyHttpError(response, parsedBody, providerName, model, parseError);
+    }
+
+    // Parse streaming NDJSON response
+    const responseData = await response.text();
+    const jsonObjects = responseData.split('\n');
+
+    let fullResponseText = '';
+    let totalTokens = 0;
+    let rawData = null;
+
+    for (const jsonObject of jsonObjects) {
+      try {
+        if (jsonObject.trim() === '') continue;
+        const parsedObject = JSON.parse(jsonObject);
+        if (parsedObject.message) {
+          fullResponseText += parsedObject.message.content;
+        }
+        if (parsedObject.done) {
+          rawData = parsedObject;
+          totalTokens = (parsedObject.prompt_eval_count || 0) + (parsedObject.eval_count || 0);
+        }
+      } catch (error) {
+        console.error('Error parsing JSON object:', error, jsonObject);
+      }
+    }
+
+    const aiResponse = fullResponseText.trim();
+
+    return {
+      success: true,
+      retries: attempt - 1,
+      text: aiResponse,
+      totalTokens: totalTokens,
+      raw: rawData
+    };
+  }, config.retry);
 }
 
 const id = pluginName;

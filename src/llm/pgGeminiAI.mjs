@@ -16,13 +16,19 @@ limitations under the License.
 */
 
 const pluginName = "pgGeminiNative";
-const pluginVersion = "0.0.5";
+const pluginVersion = "0.0.6";
 const commands = true;
+const providerName = "Gemini";
 
 import process from 'node:process';
+import { withRetry } from './common/retry.mjs';
+import { classifyHttpError, classifyNetworkError } from './common/errors.mjs';
 
 const keyName = 'GEMINI_API_KEY';
 const API_KEY = process.env[keyName];
+
+// Uses library retry defaults.
+export const defaultRetry = {};
 
 function envInit() {
   if (!API_KEY) {
@@ -44,73 +50,63 @@ function translateRole(role, index) {
 }
 
 async function complete(model, prompt, messages0, config={}) {
-  const maxTries = 3;
-  let retries = 0; 
+  return withRetry(async ({ attempt }) => {
+    let contents = [];
+    let messages = messages0;
+    if (messages === null) messages = [];
 
-  while (retries < maxTries) {
-    try {
-      // 1. Transform messages to Native Gemini format
-      let contents = [];
-      let messages = messages0;
-      if( messages === null ) messages = [];
-
-      let i=0;
-      for (let msg of messages) {
-        const role = translateRole( msg.role, i );
-        contents.push({
-          role: role,
-          parts: [{ text: msg.content }]
-        });
-        i++;
-      }
-
-      // Add the current prompt
+    let i = 0;
+    for (let msg of messages) {
+      const role = translateRole(msg.role, i);
       contents.push({
-        role: "user",
-        parts: [{ text: prompt }]
+        role: role,
+        parts: [{ text: msg.content }]
       });
+      i++;
+    }
 
-      // 2. Call the Native endpoint
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
-            
-      const response = await fetch(url, {
+    contents.push({
+      role: "user",
+      parts: [{ text: prompt }]
+    });
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+
+    let response;
+    try {
+      response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents })
       });
-
-      if (!response.ok) {
-        if (response.status === 429 || response.status === 500 || response.status === 503) {
-          const waitTime = 3000;
-          console.warn(`⚡ Gemini API issue (${response.status}). Retrying...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          retries++;
-          continue;
-        }
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(`Gemini API error ${response.status}: ${JSON.stringify(errorData)}`);
-      }
-
-      const data = await response.json();
-      const aiResponse = data.candidates[0].content.parts[0].text;
-
-      return {
-        success: true,
-        retries: retries,
-        text: aiResponse,
-        totalTokens: data.usageMetadata.totalTokenCount,
-        responseId: data.responseId,        
-        raw: data
-      };
-
-    } catch (err) {
-      if (err.message?.includes('429') || err.message?.includes('500')) {
-        continue; // already handled above
-      }
-      console.error('❌ Error contacting Gemini Native:', err.message);
-      throw err;
+    } catch (fetchErr) {
+      throw classifyNetworkError(fetchErr, providerName, model);
     }
-  }
+
+    if (!response.ok) {
+      let parsedBody;
+      let parseError;
+      try {
+        parsedBody = await response.json();
+      } catch (e) {
+        parseError = e;
+        try { parsedBody = await response.text(); } catch { parsedBody = null; }
+      }
+      throw classifyHttpError(response, parsedBody, providerName, model, parseError);
+    }
+
+    const data = await response.json();
+    const aiResponse = data.candidates[0].content.parts[0].text;
+
+    return {
+      success: true,
+      retries: attempt - 1,
+      text: aiResponse,
+      totalTokens: data.usageMetadata.totalTokenCount,
+      responseId: data.responseId,
+      raw: data
+    };
+  }, config.retry);
 }
 
 const id = pluginName;
