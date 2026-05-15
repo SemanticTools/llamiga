@@ -32,8 +32,12 @@ Does not call any external API.
 */
 
 const pluginName = "pgTestBert2";
-const pluginVersion = "0.8.0";
+const pluginVersion = "0.9.0";
 const commands = true;
+
+// Distinct plugin-level retry default — used by merge-chain integration tests
+// to verify the plugin layer is honored and carried through.
+export const defaultRetry = { baseMs: 777 };
 
 function envInit() {
   // No API key needed for test plugin
@@ -76,7 +80,7 @@ async function complete(model, prompt, messages0, config = {}) {
 
   const mockTokenCount = Math.floor((prompt.length + responseText.length) / 4);
 
-  return {
+  const result = {
     success: true,
     retries: 0,
     text: responseText,
@@ -89,6 +93,12 @@ async function complete(model, prompt, messages0, config = {}) {
       message_count: messages0?.length ?? 0
     }
   };
+
+  if (config.captureMergedRetry) {
+    result.capturedRetry = config.retry;
+  }
+
+  return result;
 }
 
 const id = pluginName;

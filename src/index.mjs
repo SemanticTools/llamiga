@@ -30,6 +30,7 @@ import * as testbert1 from './test/pgTestbert1.mjs';
 import * as testbert2 from './test/pgTestbert2.mjs';
 
 import * as common from './llm/common/common.mjs';
+import { mergeRetry, validateRetry } from './llm/common/retry.mjs';
 
 let debug = false;
 
@@ -248,6 +249,7 @@ function createObject( pluginSpecs0, options = {}) {
 
         pluginIndex: pluginIndex,
         pluginConfigs: {},
+        sessionConfig: undefined,
         plugins: plugins,
         plugin: plugin,
         pluginName: pluginName,
@@ -256,6 +258,7 @@ function createObject( pluginSpecs0, options = {}) {
         context: {},
         model: model,
         discussion: [],
+        uniqueMessageId: 10000,
         lastResponse: "sorry, there is no response yet",
         macros: macros,
         chainFlag: false,
@@ -345,7 +348,7 @@ function createObject( pluginSpecs0, options = {}) {
             if( !content ) {
                 throw new Error( 'Message is empty' );
             }
-            let message = { role: role, content };
+            let message = { msgId: this.uniqueMessageId++, active: true, role: role, content };
             this.discussion.push( message );
 
         },
@@ -356,7 +359,7 @@ function createObject( pluginSpecs0, options = {}) {
             }
 
             const specificRole = "system";
-            let message = { role: specificRole, content };
+            let message = {  msgId: this.uniqueMessageId++, active: true, role: specificRole, content };
             if( this.discussion.length > 0 ) {
                 if( this.discussion[0].role === 'system' ) {
                     this.discussion[0] = message;
@@ -470,6 +473,49 @@ function createObject( pluginSpecs0, options = {}) {
 
             return await this._rawChat( prompt, null, specs, overrideConfig );
         },
+        askStream: async function( p1, p2, p3 ) {
+
+            /*
+                Either:  askStream( prompt, onChunk )
+                     or  askStream( specs, prompt, onChunk )
+            */
+
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot use askStream in chain mode' );
+            }
+
+            let specs = null;
+            let prompt0 = null;
+            let onChunk = null;
+
+            // Parse parameters
+            if( typeof p2 === 'function' ) {
+                // askStream( prompt, onChunk )
+                prompt0 = p1;
+                onChunk = p2;
+            } else if( typeof p3 === 'function' ) {
+                // askStream( specs, prompt, onChunk )
+                specs = p1;
+                prompt0 = p2;
+                onChunk = p3;
+            } else {
+                throw new Error( 'askStream requires a callback function as the last parameter' );
+            }
+
+            if(!prompt0) {
+                throw new Error( 'Prompt is empty' );
+            }
+
+            let prompt = this._promptMacros( prompt0 );
+
+            // Create streaming config
+            const streamConfig = {
+                stream: true,
+                onChunk: onChunk
+            };
+
+            return await this._rawChat( prompt, null, specs, streamConfig );
+        },
         rawChat: async function( specs, prompt, discussion, overrideConfig ) {
 
             if( this.chainFlag ) {
@@ -485,7 +531,7 @@ function createObject( pluginSpecs0, options = {}) {
         },
         chat: async function( p1, p2, p3  ) {
 
-            /* 
+            /*
                 Either,  chat ( prompt ) or chat ( specs, prompt [, overrideConfig ])
             */
 
@@ -516,6 +562,57 @@ function createObject( pluginSpecs0, options = {}) {
                this.addMessage( 'user', prompt );
                this.addMessage( 'assistant', result.text );
             }
+            delete result.actualPrompt;
+            return result;
+        },
+        chatStream: async function( p1, p2, p3 ) {
+
+            /*
+                Either:  chatStream( prompt, onChunk )
+                     or  chatStream( specs, prompt, onChunk )
+            */
+
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot use chatStream in chain mode' );
+            }
+
+            let specs = null;
+            let prompt0 = null;
+            let onChunk = null;
+
+            // Parse parameters
+            if( typeof p2 === 'function' ) {
+                // chatStream( prompt, onChunk )
+                prompt0 = p1;
+                onChunk = p2;
+            } else if( typeof p3 === 'function' ) {
+                // chatStream( specs, prompt, onChunk )
+                specs = p1;
+                prompt0 = p2;
+                onChunk = p3;
+            } else {
+                throw new Error( 'chatStream requires a callback function as the last parameter' );
+            }
+
+            let prompt = this._promptMacros( prompt0 );
+
+            if(! this.plugin && !specs) {
+                throw new Error( 'No plugin selected. Use setLM() to select a plugin.' );
+            }
+
+            // Create streaming config
+            const streamConfig = {
+                stream: true,
+                onChunk: onChunk
+            };
+
+            let result = await this._rawChat( prompt, this.discussion, specs, streamConfig );
+
+            if( result ) {
+                this.addMessage( 'user', prompt );
+                this.addMessage( 'assistant', result.text );
+            }
+
             delete result.actualPrompt;
             return result;
         },
@@ -556,24 +653,36 @@ function createObject( pluginSpecs0, options = {}) {
                 throw new Error( 'No plugin found, giving up' );
             }            
 
-            if( overrideConfig ) {
-                config = {
-                    ...overrideConfig,
-                    framework,
-                    session: this
-                };
-            }
-            else {
-                config = this.getConfig( plugin._.id, model );
-            }
+            // Assemble config from the four-layer merge chain:
+            //   sessionConfig → pluginConfigs[plugin::default] → pluginConfigs[plugin::model] → overrideConfig
+            // Retry block is resolved separately via mergeRetry, walking the same layers plus plugin.defaultRetry.
+            const sessionLayer = this.sessionConfig;
+            const pluginDefaultLayer = this.pluginConfigs[ plugin._.id + "::default" ];
+            const pluginModelLayer = this.pluginConfigs[ plugin._.id + "::" + model ];
 
+            config = {
+                ...(sessionLayer || {}),
+                ...(pluginDefaultLayer || {}),
+                ...(pluginModelLayer || {}),
+                ...(overrideConfig || {}),
+                framework,
+                session: this,
+            };
 
-            let result = 
-                await plugin.complete( 
-                    model, 
-                    prompt, 
+            config.retry = mergeRetry(
+                plugin.defaultRetry,
+                sessionLayer?.retry,
+                pluginDefaultLayer?.retry,
+                pluginModelLayer?.retry,
+                overrideConfig?.retry,
+            );
+
+            let result =
+                await plugin.complete(
+                    model,
+                    prompt,
                     discussion,
-                    config 
+                    config
                 );
 
             if( result.success ) {
@@ -598,6 +707,17 @@ function createObject( pluginSpecs0, options = {}) {
             }
             return this.discussion;
         },
+        setDiscussion: function( newDiscussion ) {
+
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot get discussion in chain mode' );
+            }
+            //check if newDiscussion exists and is an array
+            if( !newDiscussion || !Array.isArray( newDiscussion )) {
+                throw new Error( 'Discussion must be an array' );
+            }
+            this.discussion = newDiscussion;
+        },        
         pruneDiscussion: function( index ) {
 
             if( this.chainFlag ) {
@@ -610,28 +730,98 @@ function createObject( pluginSpecs0, options = {}) {
                 this.discussion.splice( index, 1 );
             }
         },
+        truncateStrings: function( truncateStrings0, maxLen ) {
+
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot truncate discussion strings in chain mode' );
+            }
+
+            //Copy truncateStrings0 to truncateStrings to avoid modifying the objects in the original array
+            let truncateStrings = [];
+            for( let i=0; i<truncateStrings0.length; i++ ) {
+                let ts = truncateStrings0[i];
+                let ts2 = { ...ts };
+                if( ts2.data.length > maxLen && ! ts2.hardDelete ) {
+                    ts2.truncated = ts2.data.substring( 0, maxLen ) + "...";
+                }
+                else if ( ts2.hardDelete ) {
+                    ts2.truncated = "";
+                }
+                truncateStrings.push( ts2 );
+            }
+
+            //loop through discussion and truncate strings matching truncateStrings.data to maxLen
+            //but skip system messages
+            //TODO, what about macros in system messages, we fix this later
+
+            for( let i=0; i<this.discussion.length; i++ ) {
+                let message = this.discussion[i];
+                if( message.role !== 'system' ) {
+                    if( message.originalContent ) {
+                        //allready truncated
+                        console.log("allready truncated. continue");
+                    }
+                    for( let j=0; j<truncateStrings.length; j++ ) {
+                        let ts = truncateStrings[j];
+                        if( message.content.includes( ts.data )) {
+                            if( debug ) console.log( `Truncating message content at index ${i} for string ${ts.data}` );
+                            //now replace all occurrences of ts.data in message.content with ts.truncated
+                            message.originalContent = message.content;
+                            message.content = message.content.split( ts.data ).join( ts.truncated );
+                        }
+                    }
+                }
+            }
+        
+        },        
+        
         getConfig: function( plugin, model ) {
 
             if( this.chainFlag ) {
                 throw new Error( 'Cannot get config in chain mode' );
-            }            
-            let key1 = plugin + "::" + model;
-            let key2 = plugin + "::default";
-
-            if( this.pluginConfigs[ key1 ] !== undefined ) {
-                return this.pluginConfigs[ key1 ];
             }
+            // 0-arg form → return session-wide config
+            if( plugin === undefined ) {
+                return this.sessionConfig;
+            }
+            // 1- or 2-arg form → fallback chain plugin::model → plugin::default → sessionConfig
+            if( model !== undefined ) {
+                let key1 = plugin + "::" + model;
+                if( this.pluginConfigs[ key1 ] !== undefined ) {
+                    return this.pluginConfigs[ key1 ];
+                }
+            }
+            let key2 = plugin + "::default";
             if( this.pluginConfigs[ key2 ] !== undefined ) {
                 return this.pluginConfigs[ key2 ];
             }
-            return undefined;
+            return this.sessionConfig;
         },
-        setConfig: function( plugin, p1, p2 ) {
+        setConfig: function( p0, p1, p2 ) {
 
             if( this.chainFlag ) {
                 throw new Error( 'Cannot set config in chain mode' );
             }
 
+            // 1-arg form: setConfig({...}) → session-wide
+            if( typeof p0 !== 'string' ) {
+                if( p0 === undefined || p0 === null || typeof p0 !== 'object' || Array.isArray(p0) ) {
+                    throw new Error( 'setConfig: config must be an object' );
+                }
+                if( p1 !== undefined || p2 !== undefined ) {
+                    throw new Error( 'setConfig: extra arguments not allowed with object form' );
+                }
+                if( p0.retry !== undefined ) validateRetry( p0.retry );
+                this.sessionConfig = {
+                    ...p0,
+                    framework,
+                    session: this
+                };
+                return;
+            }
+
+            // 2- or 3-arg form: setConfig(plugin, [model,] {...})
+            let plugin = p0;
             let model = "";
             let value = null;
             if( p2 === undefined ) {
@@ -642,24 +832,35 @@ function createObject( pluginSpecs0, options = {}) {
                 model = p1;
                 value = p2;
             }
-                
-            if( this.pluginIndex[ plugin  ] ) {
-                this.pluginConfigs[plugin + "::" + model] = {
-                    ...value,
-                    framework,
-                    session: this
-                };
-            }
-            else {
+
+            if( !this.pluginIndex[ plugin ] ) {
                 throw new Error( 'No plugin found with name: ' + plugin );
             }
+            if( value === undefined || value === null || typeof value !== 'object' || Array.isArray(value) ) {
+                throw new Error( 'setConfig: config must be an object' );
+            }
+            if( value.retry !== undefined ) validateRetry( value.retry );
+
+            this.pluginConfigs[plugin + "::" + model] = {
+                ...value,
+                framework,
+                session: this
+            };
         }
         ,
-        clearConfig: function( plugin, p1 ) {
+        clearConfig: function( p0, p1 ) {
 
             if( this.chainFlag ) {
                 throw new Error( 'Cannot clear config in chain mode' );
-            }            
+            }
+
+            // 0-arg form: clearConfig() → clear session-wide
+            if( p0 === undefined ) {
+                this.sessionConfig = undefined;
+                return;
+            }
+
+            let plugin = p0;
             let model = "";
             if( p1 === undefined ) {
                 model = "default";
@@ -667,8 +868,8 @@ function createObject( pluginSpecs0, options = {}) {
             else {
                 model = p1;
             }
-                
-            if( this.pluginIndex[ plugin  ] ) {
+
+            if( this.pluginIndex[ plugin ] ) {
                 delete this.pluginConfigs[ plugin + "::" + model ];
             }
             else {
