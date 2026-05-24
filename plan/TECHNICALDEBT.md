@@ -128,3 +128,21 @@ This is a small change but it's an API behavior change — anyone relying on `cr
 **Why this might bite:** Strict validation surfaces a backward-compat risk if any existing user has been passing config keys we don't recognize (currently silently ignored). They'd start getting errors at `setConfig` time on upgrade. Mitigation: only validate the `retry` sub-object; leave other keys untouched.
 
 **Trigger to revisit:** An existing user reporting `setConfig` throws after upgrade for a non-retry-related key.
+
+---
+
+## Read-only session methods are unnecessarily blocked in chain mode
+
+**Where:** Throughout `src/index.mjs` — every read-only session method currently throws `'Cannot <op> in chain mode'`. Examples: `getDiscussion` (line 691), `getConfig` (~778), `getModel`, `getProviderName`, `getLastDetailedResponse`, etc. The V0.10 hide/restore inspection helpers (`listTurns`, `isTurnHidden`, `isSectionHidden`, `previewDiscussion`) follow this same convention.
+
+**What's wrong:** Chain mode was designed to prevent state changes mid-chain, but the rule was overgeneralized to "block everything." Read-only operations have no side effects and can't corrupt chain state. Blocking them prevents introspection — exactly when introspection is most useful (debugging "why is my chain producing weird output?"). A user can't even call `getDiscussion` to see what's accumulated, or `previewDiscussion` to see what the next chain step will actually send.
+
+**Why we accepted it for V0.10:** Relaxing it requires touching every read-only method on the session, deciding what "read-only" means precisely for each, and updating tests for the new behavior. That's a wider scope than HIDETURNS warrants, and the new V0.10 helpers blocking in chain mode is *consistent* with the existing behavior — annoying, but not a regression.
+
+**Better fix when revisited:**
+1. Audit every method on the session, classify as read-only or state-mutating.
+2. Remove the chain-mode block from all read-only methods (both existing and the V0.10 helpers).
+3. Document explicitly: "chain mode blocks state-mutating methods; reads work normally."
+4. Update tests in `tsInterface.mjs` that currently assert the read-blocks (e.g., `getConfig in chain mode throws` — that test would flip to assert it works).
+
+**Trigger to revisit:** A user reporting they can't debug a chain because `getDiscussion`/`previewDiscussion` throws, or any time we feel the API ergonomics around chain mode justify a wider pass.

@@ -21,6 +21,12 @@ console.log(response.text);
 
 That's it. Swap `'gemini'` for `'openai'`, `'anthropic'`, `'mistral'`, `'grok'`, or `'ollama'` — same code, different brain.
 
+## What's New in 0.10
+
+- **Named turns** — pass `{ name }` to `chat()` to give a turn a stable identifier. Later, `hideTurn(name)` skips it on submission to the LLM; `restoreTurn(name)` brings it back. Non-destructive — the discussion is untouched. See [Hiding turns and sections](#hiding-turns-and-sections).
+- **Section markers in prompts** — mark substrings inside a prompt with `<<section>>…<</section>>`, then `hideSection(turnId, sectionId)` drops just that piece on submission. Markers are always stripped before the LLM sees the content.
+- **Inspection helpers** — `listTurns()`, `isTurnHidden()`, `isSectionHidden()`, `previewDiscussion()` show what's hidden and what the LLM would actually receive.
+
 ## What's New in 0.9
 
 - **Unified error taxonomy** — every provider failure throws an `Error` with `.code` (one of `RATE_LIMIT`, `QUOTA_EXHAUSTED`, `AUTH`, `CLIENT`, `SERVER`, `NETWORK`), so you can handle each case distinctly without parsing message strings. Raw upstream data attached via `.raw.headers` / `.raw.responseBody` / `.cause`. See [Error Handling](#error-handling).
@@ -120,6 +126,74 @@ session.pruneDiscussion(llAmiga.PRUNE_ALL);
 // Remove a specific message by index
 session.pruneDiscussion(2);
 ```
+
+## Hiding turns and sections
+
+Sometimes you want a chunk of earlier context to stop being sent to the LLM — without losing it from your local discussion. llamiga supports two granularities, both **non-destructive** (the data stays in the discussion; only what's *submitted* changes) and both **reversible**.
+
+### Naming a turn
+
+Pass `{ name }` to a `chat()` call to give that turn an identifier:
+
+```javascript
+await session.chat(
+  "Seed: red, fast, electric\nWrite me a product plan based on those traits.",
+  { name: 'plan' }
+);
+```
+
+Both messages of the turn (user prompt + assistant reply) are stamped with `turnId: 'plan'`. Names must be unique within the session — reusing a name throws. `ask()` doesn't accept `name` (it doesn't persist messages).
+
+### Hiding and restoring a turn
+
+```javascript
+session.hideTurn('plan');     // 'plan' turn now skipped on every subsequent ask/chat
+session.restoreTurn('plan');  // back in the rotation
+```
+
+### Section markers within a prompt
+
+Mark substrings inside a prompt with `<<sectionId>>…<</sectionId>>`. Later, hide just that piece while keeping the rest of the turn intact:
+
+```javascript
+await session.chat(
+  "<<seed>>Seed: red, fast, electric<</seed>>\n" +
+  "Write a product plan based on the seed.",
+  { name: 'plan' }
+);
+
+session.hideSection('plan', 'seed');     // the seed line is dropped; the rest of the turn still goes
+session.restoreSection('plan', 'seed');
+```
+
+**Marker rules:**
+- Section ids look like `<<id>>` and match `[A-Za-z][\w-]*`.
+- All section markers are **always stripped** before the LLM sees the content, whether the section is hidden or visible.
+- To include a literal `<<` in a prompt, escape it as `<<<<`.
+- Sections can't be nested; duplicate ids in one message throw at `chat()` time.
+
+### Independent axes
+
+Turn-hide and section-hide are independent. Hiding a turn doesn't affect its section flags; restoring a turn doesn't restore individually-hidden sections.
+
+### Inspection
+
+```javascript
+session.listTurns();
+// → [
+//     { turnId: 'plan', hidden: false, sections: [{ id: 'seed', hidden: true }] },
+//     ...
+//   ]
+
+session.isTurnHidden('plan');                // → boolean
+session.isSectionHidden('plan', 'seed');     // → boolean
+
+session.previewDiscussion();
+// → [{ role, content }, ...]  ← exactly what the LLM would receive (markers stripped, hidden turns/sections dropped)
+//   This is a fresh snapshot — mutating it has no effect on the session.
+```
+
+`previewDiscussion()` is the go-to debugging tool when something doesn't seem right: it shows the post-filter content as the LLM would see it.
 
 ## Plugin Configuration
 
@@ -340,6 +414,15 @@ let session = llAmiga.createSession(llAmiga.ALL_PLUGINS);
 | `clearConfig()` | Clear session-wide config |
 | `clearConfig(plugin)` | Clear provider config |
 | `clearConfig(plugin, model)` | Clear provider+model config |
+| `chat(prompt, {name})` | Chat with a named turn |
+| `hideTurn(turnId)` | Skip a named turn on subsequent LLM calls |
+| `restoreTurn(turnId)` | Un-skip a previously hidden turn |
+| `hideSection(turnId, sectionId)` | Skip a section within a turn |
+| `restoreSection(turnId, sectionId)` | Un-skip a previously hidden section |
+| `listTurns()` | Enumerate named turns and their hide state |
+| `isTurnHidden(turnId)` | Is this turn currently hidden? |
+| `isSectionHidden(turnId, sectionId)` | Is this section currently hidden? |
+| `previewDiscussion()` | Post-filter discussion array as the LLM would see it |
 | `chain()` | Start a chain |
 | `runAll()` | Execute chain |
 

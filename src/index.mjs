@@ -31,6 +31,7 @@ import * as testbert2 from './test/pgTestbert2.mjs';
 
 import * as common from './llm/common/common.mjs';
 import { mergeRetry, validateRetry } from './llm/common/retry.mjs';
+import { validateSections, parseAndFilterSections } from './llm/common/markers.mjs';
 
 let debug = false;
 
@@ -335,7 +336,7 @@ function createObject( pluginSpecs0, options = {}) {
             return this;
             
         },
-        addMessage: function( role, content ) {
+        addMessage: function( role, content, opts ) {
 
             if( this.chainFlag ) {
                 throw new Error( 'Cannot add message in chain mode' );
@@ -348,7 +349,16 @@ function createObject( pluginSpecs0, options = {}) {
             if( !content ) {
                 throw new Error( 'Message is empty' );
             }
-            let message = { msgId: this.uniqueMessageId++, active: true, role: role, content };
+            let message = {
+                msgId: this.uniqueMessageId++,
+                active: true,
+                role: role,
+                content,
+                hiddenSections: new Set(),
+                sectionIds: [],
+            };
+            if( opts && opts.turnId ) message.turnId = opts.turnId;
+            if( opts && Array.isArray( opts.sectionIds )) message.sectionIds = opts.sectionIds;
             this.discussion.push( message );
 
         },
@@ -359,7 +369,14 @@ function createObject( pluginSpecs0, options = {}) {
             }
 
             const specificRole = "system";
-            let message = {  msgId: this.uniqueMessageId++, active: true, role: specificRole, content };
+            let message = {
+                msgId: this.uniqueMessageId++,
+                active: true,
+                role: specificRole,
+                content,
+                hiddenSections: new Set(),
+                sectionIds: [],
+            };
             if( this.discussion.length > 0 ) {
                 if( this.discussion[0].role === 'system' ) {
                     this.discussion[0] = message;
@@ -418,50 +435,70 @@ function createObject( pluginSpecs0, options = {}) {
             return result.text;
         },*/    
         chainAsk: function( p1, p2, p3 ) {
-            if( debug ) console.log("chained-ask for " + specs ) 
-            
-            /* 
-                Either,  chat ( prompt ) or chat ( specs, prompt [, overrideConfig ])
+            if( debug ) console.log("chained-ask")
+
+            /*
+                chain().ask( prompt )
+                chain().ask( prompt, options )           ← rejected (no naming in chain mode)
+                chain().ask( specs, prompt [, options] ) ← options rejected if it carries name
             */
 
-            let specs = p1;
-            let prompt = p2;
-            let overrideConfig = p3;
-
-            if(! p2 ) {
-                prompt = p1;
+            let specs, prompt, overrideConfig;
+            if( typeof p2 === 'string' ) {
+                specs = p1;
+                prompt = p2;
+                overrideConfig = p3;
+            } else if( p2 && typeof p2 === 'object' ) {
                 specs = null;
-                overrideConfig = null;
+                prompt = p1;
+                overrideConfig = p2;
+            } else {
+                specs = null;
+                prompt = p1;
+                overrideConfig = undefined;
             }
-            
+
             if(!prompt) {
                 throw new Error( 'Prompt is empty' );
-            }            
+            }
+
+            if( overrideConfig && typeof overrideConfig === 'object' && overrideConfig.name ) {
+                throw new Error( 'name is not allowed in chain mode' );
+            }
 
             /* We do not run macros now, we do that when chainData gets "run" */
 
             this.chainData.push( { function: "ask", specs, prompt, overrideConfig } );
 
             return this;
-        },            
+        },
         directAsk: async function( p1, p2, p3 ) {
 
             if( this.chainFlag ) {
                 throw new Error( 'Cannot use ask in chain mode' );
             }
 
-            let specs = p1;
-            let prompt0 = p2;
-            let overrideConfig = p3;
-
-            if(! p2 ) {
-                prompt0 = p1;
+            let specs, prompt0, overrideConfig;
+            if( typeof p2 === 'string' ) {
+                specs = p1;
+                prompt0 = p2;
+                overrideConfig = p3;
+            } else if( p2 && typeof p2 === 'object' ) {
                 specs = null;
-                overrideConfig = null;
+                prompt0 = p1;
+                overrideConfig = p2;
+            } else {
+                specs = null;
+                prompt0 = p1;
+                overrideConfig = undefined;
             }
 
             if(!prompt0) {
                 throw new Error( 'Prompt is empty' );
+            }
+
+            if( overrideConfig && typeof overrideConfig === 'object' && overrideConfig.name ) {
+                throw new Error( 'name is not allowed on ask() — use chat() for named turns' );
             }
 
             let prompt = this._promptMacros( prompt0 );
@@ -532,21 +569,32 @@ function createObject( pluginSpecs0, options = {}) {
         chat: async function( p1, p2, p3  ) {
 
             /*
-                Either,  chat ( prompt ) or chat ( specs, prompt [, overrideConfig ])
+                chat( prompt )
+                chat( prompt, options )
+                chat( specs, prompt [, options ] )
+                options may carry { name } to stamp the resulting turn.
             */
 
             if( this.chainFlag ) {
                 throw new Error( 'Cannot use chat in chain mode' );
             }
 
-            let specs = p1;
-            let prompt0 = p2;
-            let overrideConfig = p3;
-
-            if(! p2 ) {
-                prompt0 = p1;
+            let specs, prompt0, overrideConfig;
+            if( typeof p2 === 'string' ) {
+                // chat( specs, prompt [, options ] )
+                specs = p1;
+                prompt0 = p2;
+                overrideConfig = p3;
+            } else if( p2 && typeof p2 === 'object' ) {
+                // chat( prompt, options )
                 specs = null;
-                overrideConfig = null;
+                prompt0 = p1;
+                overrideConfig = p2;
+            } else {
+                // chat( prompt )
+                specs = null;
+                prompt0 = p1;
+                overrideConfig = undefined;
             }
 
             let prompt = this._promptMacros( prompt0 );
@@ -555,21 +603,37 @@ function createObject( pluginSpecs0, options = {}) {
                 throw new Error( 'No plugin selected. Use setProvider() to select a plugin.' );
             }
 
-            //let config = this.getConfig( this.plugin._.id, this.model );
+            // Extract turn name (if any) and validate sections / uniqueness up front.
+            let turnId = null;
+            let sectionIds = [];
+            let downstreamConfig = overrideConfig;
+            if( overrideConfig && typeof overrideConfig === 'object' && overrideConfig.name ) {
+                turnId = overrideConfig.name;
+                if( this.discussion.some( m => m.turnId === turnId )) {
+                    throw new Error( `Turn name '${turnId}' already in use` );
+                }
+                sectionIds = validateSections( prompt );
+                // Don't leak `name` into the plugin config — copy and strip.
+                downstreamConfig = { ...overrideConfig };
+                delete downstreamConfig.name;
+            }
 
-            let result = await this._rawChat( prompt, this.discussion, specs, overrideConfig );
+            let result = await this._rawChat( prompt, this.discussion, specs, downstreamConfig );
             if( result ) {
-               this.addMessage( 'user', prompt );
-               this.addMessage( 'assistant', result.text );
+               const userOpts = turnId ? { turnId, sectionIds } : undefined;
+               const asstOpts = turnId ? { turnId } : undefined;
+               this.addMessage( 'user', prompt, userOpts );
+               this.addMessage( 'assistant', result.text, asstOpts );
             }
             delete result.actualPrompt;
             return result;
         },
-        chatStream: async function( p1, p2, p3 ) {
+        chatStream: async function( p1, p2, p3, p4 ) {
 
             /*
-                Either:  chatStream( prompt, onChunk )
-                     or  chatStream( specs, prompt, onChunk )
+                Either:  chatStream( prompt, onChunk [, options] )
+                     or  chatStream( specs, prompt, onChunk [, options] )
+                options may carry { name } to stamp the resulting turn.
             */
 
             if( this.chainFlag ) {
@@ -579,17 +643,20 @@ function createObject( pluginSpecs0, options = {}) {
             let specs = null;
             let prompt0 = null;
             let onChunk = null;
+            let options = null;
 
             // Parse parameters
             if( typeof p2 === 'function' ) {
-                // chatStream( prompt, onChunk )
+                // chatStream( prompt, onChunk [, options] )
                 prompt0 = p1;
                 onChunk = p2;
+                if( p3 !== undefined ) options = p3;
             } else if( typeof p3 === 'function' ) {
-                // chatStream( specs, prompt, onChunk )
+                // chatStream( specs, prompt, onChunk [, options] )
                 specs = p1;
                 prompt0 = p2;
                 onChunk = p3;
+                if( p4 !== undefined ) options = p4;
             } else {
                 throw new Error( 'chatStream requires a callback function as the last parameter' );
             }
@@ -600,17 +667,33 @@ function createObject( pluginSpecs0, options = {}) {
                 throw new Error( 'No plugin selected. Use setLM() to select a plugin.' );
             }
 
-            // Create streaming config
+            // Extract turn name (if any) and validate sections / uniqueness up front.
+            let turnId = null;
+            let sectionIds = [];
+            if( options && typeof options === 'object' && options.name ) {
+                turnId = options.name;
+                if( this.discussion.some( m => m.turnId === turnId )) {
+                    throw new Error( `Turn name '${turnId}' already in use` );
+                }
+                sectionIds = validateSections( prompt );
+            }
+
+            // Build streaming config; merge any caller-supplied retry/other options.
             const streamConfig = {
                 stream: true,
-                onChunk: onChunk
+                onChunk: onChunk,
+                ...(options || {}),
             };
+            // strip turn-only fields from streamConfig before passing down
+            delete streamConfig.name;
 
             let result = await this._rawChat( prompt, this.discussion, specs, streamConfig );
 
             if( result ) {
-                this.addMessage( 'user', prompt );
-                this.addMessage( 'assistant', result.text );
+                const userOpts = turnId ? { turnId, sectionIds } : undefined;
+                const asstOpts = turnId ? { turnId } : undefined;
+                this.addMessage( 'user', prompt, userOpts );
+                this.addMessage( 'assistant', result.text, asstOpts );
             }
 
             delete result.actualPrompt;
@@ -677,11 +760,23 @@ function createObject( pluginSpecs0, options = {}) {
                 overrideConfig?.retry,
             );
 
+            // Submission filter (V0.10):
+            //   - drop messages with active === false (HideTurn)
+            //   - within each remaining message, drop bodies of hidden sections and strip all markers
+            //   - also strip markers from the current prompt (no hidden sections — it's not in the discussion yet)
+            const filteredDiscussion = (discussion || [])
+                .filter( m => m.active !== false )
+                .map( m => ({
+                    ...m,
+                    content: parseAndFilterSections( m.content, m.hiddenSections || new Set() ),
+                }));
+            const filteredPrompt = parseAndFilterSections( prompt, new Set() );
+
             let result =
                 await plugin.complete(
                     model,
-                    prompt,
-                    discussion,
+                    filteredPrompt,
+                    filteredDiscussion,
                     config
                 );
 
@@ -772,9 +867,122 @@ function createObject( pluginSpecs0, options = {}) {
                     }
                 }
             }
-        
-        },        
-        
+
+        },
+
+        // --- V0.10: hide/restore turns and sections ---
+
+        _setTurnActive: function( turnId, isActive ) {
+            const matches = this.discussion.filter( m => m.turnId === turnId );
+            if( matches.length === 0 ) {
+                throw new Error( `No turn with id '${turnId}'` );
+            }
+            for( const m of matches ) m.active = isActive;
+        },
+        hideTurn: function( turnId ) {
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot hide turn in chain mode' );
+            }
+            this._setTurnActive( turnId, false );
+        },
+        restoreTurn: function( turnId ) {
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot restore turn in chain mode' );
+            }
+            this._setTurnActive( turnId, true );
+        },
+        _findMessageWithSection: function( turnId, sectionId ) {
+            return this.discussion.find( m =>
+                m.turnId === turnId
+                && Array.isArray( m.sectionIds )
+                && m.sectionIds.includes( sectionId )
+            );
+        },
+        hideSection: function( turnId, sectionId ) {
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot hide section in chain mode' );
+            }
+            const msg = this._findMessageWithSection( turnId, sectionId );
+            if( !msg ) {
+                throw new Error( `No section '${sectionId}' in turn '${turnId}'` );
+            }
+            if( !msg.hiddenSections ) msg.hiddenSections = new Set();
+            msg.hiddenSections.add( sectionId );
+        },
+        restoreSection: function( turnId, sectionId ) {
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot restore section in chain mode' );
+            }
+            const msg = this._findMessageWithSection( turnId, sectionId );
+            if( !msg ) {
+                throw new Error( `No section '${sectionId}' in turn '${turnId}'` );
+            }
+            if( msg.hiddenSections ) msg.hiddenSections.delete( sectionId );
+        },
+        listTurns: function() {
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot list turns in chain mode' );
+            }
+            const byTurn = new Map();
+            for( const m of this.discussion ) {
+                if( !m.turnId ) continue;
+                if( !byTurn.has( m.turnId )) {
+                    byTurn.set( m.turnId, { turnId: m.turnId, messages: [], sectionIds: [] });
+                }
+                const t = byTurn.get( m.turnId );
+                t.messages.push( m );
+                if( Array.isArray( m.sectionIds )) {
+                    for( const sid of m.sectionIds ) {
+                        if( !t.sectionIds.includes( sid )) t.sectionIds.push( sid );
+                    }
+                }
+            }
+            const result = [];
+            for( const [turnId, t] of byTurn ) {
+                const hidden = t.messages.every( m => m.active === false );
+                const sections = t.sectionIds.map( sid => {
+                    const msg = t.messages.find( m =>
+                        Array.isArray( m.sectionIds ) && m.sectionIds.includes( sid )
+                    );
+                    const sectionHidden = msg && msg.hiddenSections && msg.hiddenSections.has( sid );
+                    return { id: sid, hidden: !!sectionHidden };
+                });
+                result.push({ turnId, hidden, sections });
+            }
+            return result;
+        },
+        isTurnHidden: function( turnId ) {
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot inspect turn in chain mode' );
+            }
+            const matches = this.discussion.filter( m => m.turnId === turnId );
+            if( matches.length === 0 ) {
+                throw new Error( `No turn with id '${turnId}'` );
+            }
+            return matches.every( m => m.active === false );
+        },
+        isSectionHidden: function( turnId, sectionId ) {
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot inspect section in chain mode' );
+            }
+            const msg = this._findMessageWithSection( turnId, sectionId );
+            if( !msg ) {
+                throw new Error( `No section '${sectionId}' in turn '${turnId}'` );
+            }
+            return !!(msg.hiddenSections && msg.hiddenSections.has( sectionId ));
+        },
+        previewDiscussion: function() {
+            if( this.chainFlag ) {
+                throw new Error( 'Cannot preview discussion in chain mode' );
+            }
+            return this.discussion
+                .filter( m => m.active !== false )
+                .map( m => ({
+                    role: m.role,
+                    content: parseAndFilterSections( m.content, m.hiddenSections || new Set() ),
+                }));
+        },
+
         getConfig: function( plugin, model ) {
 
             if( this.chainFlag ) {
