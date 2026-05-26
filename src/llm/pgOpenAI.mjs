@@ -29,7 +29,7 @@ import {
   StreamEventType
 } from './common/streaming.mjs';
 import { withRetry } from './common/retry.mjs';
-import { classifyHttpError, classifyNetworkError } from './common/errors.mjs';
+import { classifyHttpError, classifyNetworkError, readResponseBody } from './common/errors.mjs';
 
 const keyName = 'OPENAI_API_KEY';
 const API_KEY = process.env[keyName];
@@ -136,15 +136,8 @@ async function complete(model, prompt, messages0, config={}) {
     }
 
     if (!response.ok) {
-      let parsedBody;
-      let parseError;
-      try {
-        parsedBody = await response.json();
-      } catch (e) {
-        parseError = e;
-        try { parsedBody = await response.text(); } catch { parsedBody = null; }
-      }
-      throw classifyHttpError(response, parsedBody, providerName, model, parseError);
+      const { body, parseError } = await readResponseBody(response);
+      throw classifyHttpError(response, body, providerName, model, parseError);
     }
 
     const data = await response.json();
@@ -186,15 +179,8 @@ async function completeStreaming(model, prompt, messages0, config) {
     }
 
     if (!response.ok) {
-      let parsedBody;
-      let parseError;
-      try {
-        parsedBody = await response.json();
-      } catch (e) {
-        parseError = e;
-        try { parsedBody = await response.text(); } catch { parsedBody = null; }
-      }
-      throw classifyHttpError(response, parsedBody, providerName, model, parseError);
+      const { body, parseError } = await readResponseBody(response);
+      throw classifyHttpError(response, body, providerName, model, parseError);
     }
 
     const result = await parseSSEStream(

@@ -24,10 +24,14 @@ const providerName = "Ollama";
 
 import process from 'node:process';
 import { withRetry } from './common/retry.mjs';
-import { classifyHttpError, classifyNetworkError } from './common/errors.mjs';
+import { classifyHttpError, classifyNetworkError, readResponseBody } from './common/errors.mjs';
 
 const keyName = 'OLLAMA_API_BASE';
 const API_BASE = process.env[keyName];
+
+// Optional bearer token for setups where Ollama sits behind an auth proxy.
+// If unset, no Authorization header is sent at all (canonical Ollama runs unauthenticated).
+const API_KEY = process.env['OLLAMA_API_KEY'];
 
 // Local server cold-loads can take a while; baseline waits longer than the library default.
 export const defaultRetry = { baseMs: 20000 };
@@ -72,27 +76,26 @@ async function complete(model, prompt, messages0, config={}) {
 
     const url = API_BASE + '/api/chat';
 
+    const headers = { 'Content-Type': 'application/json' };
+    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+
+    // stream:false tells Ollama to buffer the response server-side and return
+    // a single JSON object instead of NDJSON token-by-token. Avoids proxy
+    // buffering / chunked-transfer issues some setups have with streaming.
     let response;
     try {
       response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model, messages: contents })
+        headers,
+        body: JSON.stringify({ model: model, messages: contents, stream: false })
       });
     } catch (fetchErr) {
       throw classifyNetworkError(fetchErr, providerName, model);
     }
 
     if (!response.ok) {
-      let parsedBody;
-      let parseError;
-      try {
-        parsedBody = await response.json();
-      } catch (e) {
-        parseError = e;
-        try { parsedBody = await response.text(); } catch { parsedBody = null; }
-      }
-      throw classifyHttpError(response, parsedBody, providerName, model, parseError);
+      const { body, parseError } = await readResponseBody(response);
+      throw classifyHttpError(response, body, providerName, model, parseError);
     }
 
     // Parse streaming NDJSON response

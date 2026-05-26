@@ -1,6 +1,6 @@
 {
   "name": "@semantictools/llamiga",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Your LLM amiga — one interface to OpenAI, Anthropic, Google, Mistral, xAI, and Ollama",
   "main": "src/index.mjs",
   "exports": {

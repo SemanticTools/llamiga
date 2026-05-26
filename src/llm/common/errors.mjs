@@ -156,6 +156,35 @@ function classifyOllama(status, body, provider, model, raw) {
 }
 
 /**
+ * Read an HTTP error response body once, robustly.
+ *
+ * Reads the stream as text first (consuming it exactly once), then attempts
+ * JSON.parse. If parsing succeeds, returns the parsed object; otherwise returns
+ * the raw text. If the stream read itself fails (rare — e.g. body already consumed
+ * upstream), returns null with the underlying error as parseError.
+ *
+ * Replaces the pattern of `response.json()` then falling back to `response.text()`
+ * which silently dropped body content because the stream was already drained.
+ *
+ * @param {Response} response
+ * @returns {Promise<{body: *, parseError: Error|undefined}>}
+ */
+export async function readResponseBody(response) {
+  let text;
+  try {
+    text = await response.text();
+  } catch (e) {
+    return { body: null, parseError: e };
+  }
+  try {
+    return { body: JSON.parse(text), parseError: undefined };
+  } catch {
+    // Body wasn't JSON (e.g., HTML error page from a proxy). Return as raw text.
+    return { body: text, parseError: undefined };
+  }
+}
+
+/**
  * Build a classified Error from an HTTP failure response.
  *
  * @param {Response} response   fetch Response (used for status + headers).

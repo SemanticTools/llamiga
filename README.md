@@ -21,6 +21,12 @@ console.log(response.text);
 
 That's it. Swap `'gemini'` for `'openai'`, `'anthropic'`, `'mistral'`, `'grok'`, or `'ollama'` — same code, different brain.
 
+## What's New in 0.10.1
+
+- **`OLLAMA_API_KEY` env var** — optional bearer token sent as `Authorization: Bearer <key>` for Ollama setups behind an auth proxy. Unset = no `Authorization` header (canonical local Ollama keeps working unchanged). See [Self-hosted Ollama behind a reverse proxy](#self-hosted-ollama-behind-a-reverse-proxy).
+- **Bug fix: error response bodies are now captured** when they aren't JSON. Previously, `err.raw.responseBody` was silently `null` if a proxy returned an HTML 4xx/5xx page; now you see the actual text. Affects all six provider plugins (shared helper `readResponseBody`).
+- **Ollama plugin requests with `stream: false`** — Ollama buffers the full response server-side and returns a single JSON object, avoiding chunked-transfer / proxy-buffering quirks that previously caused some setups to hang.
+
 ## What's New in 0.10
 
 - **Named turns** — pass `{ name }` to `chat()` to give a turn a stable identifier. Later, `hideTurn(name)` skips it on submission to the LLM; `restoreTurn(name)` brings it back. Non-destructive — the discussion is untouched. See [Hiding turns and sections](#hiding-turns-and-sections).
@@ -44,6 +50,38 @@ export ANTHROPIC_API_KEY=your-key   # Claude
 export MISTRAL_API_KEY=your-key     # Mistral
 export GROK_API_KEY=your-key        # Grok
 export OLLAMA_API_BASE=http://localhost:11434  # Ollama (self-hosted)
+export OLLAMA_API_KEY=optional-bearer-token    # Ollama: only if your proxy requires auth
+```
+
+### Self-hosted Ollama behind a reverse proxy
+
+Common setup: Ollama runs on a private server with an nginx / Cloudflare / load-balancer in front that handles auth and TLS. To use it with llamiga:
+
+```bash
+export OLLAMA_API_BASE=https://ollama.example.com   # or https://1.2.3.4:11435
+export OLLAMA_API_KEY=your-bearer-token              # if the proxy requires it
+```
+
+The plugin will hit `${OLLAMA_API_BASE}/api/chat` with `Authorization: Bearer ${OLLAMA_API_KEY}` (header is omitted if `OLLAMA_API_KEY` is unset). It always sends `stream: false` so the proxy doesn't have to handle chunked streaming responses.
+
+If your proxy uses a **self-signed TLS cert**, point Node at it so verification works without disabling TLS process-wide:
+
+```bash
+# Fetch the cert the server presents (one-time setup)
+echo | openssl s_client -connect 1.2.3.4:11435 -servername 1.2.3.4 2>/dev/null \
+  | sed -n '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > ollama-cert.pem
+
+# Tell Node to trust it for this process
+export NODE_EXTRA_CA_CERTS=/absolute/path/to/ollama-cert.pem
+```
+
+**Important:** when generating a self-signed cert for an IP address, the cert needs the IP in its **Subject Alternative Name** (SAN), not just the CN. Otherwise Node throws `ERR_TLS_CERT_ALTNAME_INVALID`:
+
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem \
+  -sha256 -days 730 -nodes \
+  -subj "/CN=1.2.3.4" \
+  -addext "subjectAltName=IP:1.2.3.4"
 ```
 
 ## Conversations
